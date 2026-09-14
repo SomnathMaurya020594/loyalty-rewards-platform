@@ -18,7 +18,8 @@ app.use(cors());
 app.use(helmet());
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173", // sirf apna frontend allow karo, sab nahi
+  // origin: process.env.FRONTEND_URL || "http://localhost:5173", // sirf apna frontend allow karo, sab nahi
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
 }));
 
 const apiLimiter = rateLimit({

@@ -14,7 +14,7 @@ import { Navigate } from "react-router-dom";
 import LoginPage from "./pages/LoginPage";
 import { authFetch } from "./utils/api";
 
-const API = "http://localhost:4000";
+const API = import.meta.env.VITE_API_URL;
 
 function App() {
   return (
