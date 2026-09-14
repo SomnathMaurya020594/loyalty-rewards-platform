@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id                Int      @id @default(autoincrement())
+  shopifyCustomerId String?  @unique
+  name              String
+  email          String   @unique
+  currentPoints  Int      @default(0)
+  lifetimePoints Int      @default(0)
+  redeemedPoints Int      @default(0)
+  tier           String   @default("Bronze")
+  createdAt      DateTime @default(now())
+
+  transactions   Transaction[]
+  redemptions    RewardRedemption[]
+}
+
+model LoyaltyRule {
+  id       Int      @id @default(autoincrement())
+  name     String
+  points   Int
+  isActive Boolean  @default(true)
+}
+
+model Reward {
+  id         Int      @id @default(autoincrement())
+  name       String
+  type       String
+  pointsCost Int
+  isActive   Boolean  @default(true)
+
+  redemptions RewardRedemption[]
+}
+
+model Transaction {
+  id         Int      @id @default(autoincrement())
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id])
+  type       String
+  points     Int
+  note       String
+  createdAt  DateTime @default(now())
+}
+
+model RewardRedemption {
+  id            Int      @id @default(autoincrement())
+  customerId    Int
+  customer      Customer @relation(fields: [customerId], references: [id])
+  rewardId      Int
+  reward        Reward   @relation(fields: [rewardId], references: [id])
+  pointsSpent   Int
+  generatedCode String
+  status        String   @default("PENDING") // PENDING -> APPLIED (confirmed via orders/paid webhook)
+  orderId       String?
+  createdAt     DateTime @default(now())
+}
