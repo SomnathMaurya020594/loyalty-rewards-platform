@@ -26,12 +26,11 @@ function LoginPage() {
     const data = await res.json();
 
     if (data.token) {
-      // Token ko browser mein save karo (taaki page refresh pe bhi yaad rahe)
-      localStorage.setItem("token", data.token);
-      navigate("/"); // Dashboard pe le jao
-    } else {
-      setError(data.error || "Login failed");
-    }
+  localStorage.setItem("token", data.token);
+  window.location.href = "/";   // navigate() ki jagah, poora reload
+} else {
+  setError(data.error || "Login failed");
+}
   };
 
   return (
