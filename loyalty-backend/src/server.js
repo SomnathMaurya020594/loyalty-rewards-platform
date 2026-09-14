@@ -9,6 +9,8 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 const prisma = new PrismaClient();
+
+app.set("trust proxy", 1); 
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf; // raw body ko bhi save kar liya, verification ke liye

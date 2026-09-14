@@ -1,6 +1,9 @@
 // File: App.jsx
-// Kya hai: Main entry — routes + redesigned Merchant Dashboard (stat cards, recent redemptions)
-// Yeh mock (loyalty-platform-mock.html) ke look se match karta hai, par real data + Tailwind se
+// Kya hai: Main entry — routes + Merchant Dashboard (stats, rules/rewards panels,
+// recent redemptions, tiers panel, aur customers panel with search + tier filter)
+//
+// Naya is version mein: "/tiers" route (TiersPage) + Merchant Dashboard par ek
+// "Loyalty Tiers" panel jo configured tiers aur unke thresholds dikhata hai.
 
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Link, Navigate } from "react-router-dom";
@@ -8,8 +11,17 @@ import CustomerView from "./pages/CustomerView";
 import RulesPage from "./pages/RulesPage";
 import RewardsPage from "./pages/RewardsPage";
 import CustomersPage from "./pages/CustomersPage";
+import TiersPage from "./pages/TiersPage";
 import LoginPage from "./pages/LoginPage";
 import { authFetch } from "./utils/api";
+
+const TIERS = ["All", "Bronze", "Silver", "Gold", "Platinum"];
+const TIER_STYLES = {
+  Bronze: "text-orange-700 bg-orange-50",
+  Silver: "text-gray-600 bg-gray-100",
+  Gold: "text-yellow-700 bg-yellow-50",
+  Platinum: "text-purple-700 bg-purple-50",
+};
 
 function App() {
   return (
@@ -19,6 +31,7 @@ function App() {
         <Link to="/customer" className="font-medium text-gray-900">Customer View</Link>
         <Link to="/rules" className="font-medium text-gray-900">Rules</Link>
         <Link to="/rewards" className="font-medium text-gray-900">Rewards</Link>
+        <Link to="/tiers" className="font-medium text-gray-900">Tiers</Link>
         <Link to="/customers" className="font-medium text-gray-900">Customers</Link>
         <button
           onClick={() => {
@@ -37,6 +50,7 @@ function App() {
         <Route path="/customer" element={<CustomerView />} />
         <Route path="/rules" element={localStorage.getItem("token") ? <RulesPage /> : <Navigate to="/login" />} />
         <Route path="/rewards" element={localStorage.getItem("token") ? <RewardsPage /> : <Navigate to="/login" />} />
+        <Route path="/tiers" element={localStorage.getItem("token") ? <TiersPage /> : <Navigate to="/login" />} />
         <Route path="/customers" element={localStorage.getItem("token") ? <CustomersPage /> : <Navigate to="/login" />} />
       </Routes>
     </BrowserRouter>
@@ -46,11 +60,16 @@ function App() {
 function MerchantDashboard() {
   const [rules, setRules] = useState([]);
   const [rewards, setRewards] = useState([]);
-  const [customers, setCustomers] = useState([]);
+  const [tiers, setTiers] = useState([]);
   const [redemptions, setRedemptions] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const [customers, setCustomers] = useState([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [tier, setTier] = useState("All");
 
   useEffect(() => {
     let cancelled = false;
@@ -60,15 +79,15 @@ function MerchantDashboard() {
     Promise.all([
       authFetch("/api/rules").then((r) => (r ? r.json() : [])),
       authFetch("/api/rewards").then((r) => (r ? r.json() : [])),
-      authFetch("/api/customers").then((r) => (r ? r.json() : [])),
+      authFetch("/api/tiers").then((r) => (r ? r.json() : [])),
       authFetch("/api/analytics/summary").then((r) => (r ? r.json() : null)),
       authFetch("/api/redemptions").then((r) => (r ? r.json() : [])),
     ])
-      .then(([rulesData, rewardsData, customersData, statsData, redemptionsData]) => {
+      .then(([rulesData, rewardsData, tiersData, statsData, redemptionsData]) => {
         if (cancelled) return;
         setRules(rulesData || []);
         setRewards(rewardsData || []);
-        setCustomers(customersData || []);
+        setTiers((tiersData || []).sort((a, b) => a.minPoints - b.minPoints));
         setStats(statsData);
         setRedemptions(redemptionsData || []);
       })
@@ -81,6 +100,22 @@ function MerchantDashboard() {
 
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setCustomersLoading(true);
+      const params = new URLSearchParams();
+      if (search) params.append("search", search);
+      if (tier !== "All") params.append("tier", tier);
+
+      authFetch(`/api/customers?${params.toString()}`)
+        .then((res) => (res ? res.json() : []))
+        .then(setCustomers)
+        .finally(() => setCustomersLoading(false));
+    }, 300);
+
+    return () => clearTimeout(timeout);
+  }, [search, tier]);
 
   if (loading) {
     return (
@@ -114,7 +149,7 @@ function MerchantDashboard() {
       </div>
 
       {/* Rules + Rewards side by side */}
-      <div className="grid grid-cols-2 gap-8 mb-10">
+      <div className="grid grid-cols-2 gap-8 mb-8">
         <Panel title="Loyalty Rules" emptyText="No rules yet." isEmpty={rules.length === 0}>
           {rules.map((rule) => (
             <Row key={rule.id} left={rule.name} right={`${rule.points} pts`} muted={!rule.isActive} />
@@ -125,6 +160,31 @@ function MerchantDashboard() {
           {rewards.map((reward) => (
             <Row key={reward.id} left={reward.name} right={`${reward.pointsCost} pts`} muted={!reward.isActive} />
           ))}
+        </Panel>
+      </div>
+
+      {/* Tiers panel — read-only preview here, full CRUD lives on the /tiers page */}
+      <div className="mb-10">
+        <Panel
+          title="Loyalty Tiers"
+          emptyText="No tiers configured — every customer defaults to Bronze. Set some up on the Tiers page."
+          isEmpty={tiers.length === 0}
+        >
+          <div className="flex gap-3 flex-wrap py-1">
+            {tiers.map((t) => (
+              <span
+                key={t.id}
+                className={`text-xs font-medium px-3 py-1.5 rounded-full ${
+                  TIER_STYLES[t.name] || "text-gray-600 bg-gray-100"
+                } ${!t.isActive ? "opacity-40" : ""}`}
+              >
+                {t.name} — {t.minPoints.toLocaleString()}+ pts
+              </span>
+            ))}
+          </div>
+          <Link to="/tiers" className="text-xs text-purple-600 mt-3 inline-block">
+            Manage tiers →
+          </Link>
         </Panel>
       </div>
 
@@ -166,17 +226,55 @@ function MerchantDashboard() {
         </div>
       </Panel>
 
-      {/* Customers preview */}
-      <div className="mt-8">
-        <Panel title="Customers" emptyText="No customers yet." isEmpty={customers.length === 0}>
-          {customers.slice(0, 8).map((c) => (
-            <Row
-              key={c.id}
-              left={`${c.name} (${c.email})`}
-              right={`${c.currentPoints} pts · ${c.tier}`}
+      {/* Customers panel */}
+      <div className="mt-8 bg-white border border-gray-200 rounded-lg p-5">
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+          <h3 className="font-semibold text-gray-900">Customers</h3>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search customers..."
+              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-48"
             />
-          ))}
-        </Panel>
+            <select
+              value={tier}
+              onChange={(e) => setTier(e.target.value)}
+              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+            >
+              {TIERS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {customersLoading ? (
+          <div className="text-center py-6 text-gray-400 text-sm">Loading customers…</div>
+        ) : customers.length === 0 ? (
+          <div className="text-center py-6 text-gray-400 text-sm">
+            {search || tier !== "All" ? "No customers match your search/filter." : "No customers yet."}
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {customers.slice(0, 8).map((c) => (
+              <div key={c.id} className="flex justify-between items-center py-2 text-sm">
+                <span className="text-gray-800">{c.name} ({c.email})</span>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                      TIER_STYLES[c.tier] || "text-gray-600 bg-gray-100"
+                    }`}
+                  >
+                    {c.tier}
+                  </span>
+                  <span className="text-purple-600 font-medium">{c.currentPoints} pts</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -198,7 +296,7 @@ function Panel({ title, children, isEmpty, emptyText }) {
       {isEmpty ? (
         <div className="text-center py-6 text-gray-400 text-sm">{emptyText}</div>
       ) : (
-        <div className="divide-y divide-gray-100">{children}</div>
+        <div>{children}</div>
       )}
     </div>
   );
@@ -206,7 +304,7 @@ function Panel({ title, children, isEmpty, emptyText }) {
 
 function Row({ left, right, muted }) {
   return (
-    <div className={`flex justify-between items-center py-2 text-sm ${muted ? "opacity-40" : ""}`}>
+    <div className={`flex justify-between items-center py-2 text-sm border-b border-gray-100 last:border-none ${muted ? "opacity-40" : ""}`}>
       <span className="text-gray-800">{left}</span>
       <span className="text-purple-600 font-medium">{right}</span>
     </div>
