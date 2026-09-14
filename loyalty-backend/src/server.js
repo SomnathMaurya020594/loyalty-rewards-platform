@@ -35,7 +35,7 @@ const loginLimiter = rateLimit({
   message: { error: "Too many login attempts, try again later." },
 });
 
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
