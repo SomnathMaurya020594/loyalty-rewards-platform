@@ -139,6 +139,116 @@ app.delete("/api/rewards/:id", requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
+// Add these pieces to backend/src/server.js
+
+// ─────────────────────────────────────────────────────────────
+// 1. TIER MANAGEMENT ROUTES (merchant-only, same pattern as rules/rewards)
+// Add these anywhere among the other route definitions.
+// ─────────────────────────────────────────────────────────────
+
+app.get("/api/tiers", requireAuth, async (req, res) => {
+  // Ordered by minPoints so the merchant sees them low-to-high, and so the
+  // dynamic calculator below can rely on this same order.
+  const tiers = await prisma.tier.findMany({ orderBy: { minPoints: "asc" } });
+  res.json(tiers);
+});
+
+app.post("/api/tiers", requireAuth, async (req, res) => {
+  const { name, minPoints } = req.body;
+  const newTier = await prisma.tier.create({ data: { name, minPoints: Number(minPoints) } });
+  res.json(newTier);
+});
+
+app.put("/api/tiers/:id", requireAuth, async (req, res) => {
+  const { name, minPoints } = req.body;
+  const updated = await prisma.tier.update({
+    where: { id: Number(req.params.id) },
+    data: { name, minPoints: Number(minPoints) },
+  });
+  res.json(updated);
+});
+
+app.patch("/api/tiers/:id/toggle", requireAuth, async (req, res) => {
+  const tier = await prisma.tier.findUnique({ where: { id: Number(req.params.id) } });
+  const updated = await prisma.tier.update({
+    where: { id: Number(req.params.id) },
+    data: { isActive: !tier.isActive },
+  });
+  res.json(updated);
+});
+
+app.delete("/api/tiers/:id", requireAuth, async (req, res) => {
+  await prisma.tier.delete({ where: { id: Number(req.params.id) } });
+  res.json({ success: true });
+});
+
+// Merchant manually pins a customer's tier — this also locks it, so the
+// automatic calculation below will skip that customer from then on.
+app.patch("/api/customers/:id/tier", requireAuth, async (req, res) => {
+  const { tier, locked } = req.body;
+  const updated = await prisma.customer.update({
+    where: { id: Number(req.params.id) },
+    data: { tier, tierLocked: locked ?? true },
+  });
+  res.json(updated);
+});
+
+// Merchant can unlock a customer's tier to let automatic calculation take over again.
+app.patch("/api/customers/:id/tier/unlock", requireAuth, async (req, res) => {
+  const updated = await prisma.customer.update({
+    where: { id: Number(req.params.id) },
+    data: { tierLocked: false },
+  });
+  res.json(updated);
+});
+
+// ─────────────────────────────────────────────────────────────
+// 2. DYNAMIC TIER CALCULATION — reads from the Tier table instead of
+// hardcoded thresholds. Called from the orders-paid webhook.
+// Add this function near createShopifyDiscountCode, above the webhook route.
+// ─────────────────────────────────────────────────────────────
+
+async function calculateTierFromDb(lifetimePoints) {
+  // All active tiers, lowest threshold first.
+  const tiers = await prisma.tier.findMany({
+    where: { isActive: true },
+    orderBy: { minPoints: "asc" },
+  });
+
+  // Walk through and keep the highest tier the customer already qualifies for.
+  // If no tiers are configured yet, fall back to "Bronze" so nothing breaks.
+  let matched = "Bronze";
+  for (const t of tiers) {
+    if (lifetimePoints >= t.minPoints) {
+      matched = t.name;
+    }
+  }
+  return matched;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 3. WEBHOOK CHANGE — inside /webhooks/orders-paid, where the customer's
+// points are updated, replace that block with this:
+// ─────────────────────────────────────────────────────────────
+
+/*
+    const newLifetimePoints = customer.lifetimePoints + pointsEarned;
+
+    // Only auto-update the tier if the merchant hasn't manually locked it.
+    const newTier = customer.tierLocked
+      ? customer.tier
+      : await calculateTierFromDb(newLifetimePoints);
+
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: {
+        currentPoints: customer.currentPoints + pointsEarned,
+        lifetimePoints: newLifetimePoints,
+        tier: newTier,
+      },
+    });
+*/
+
 app.get("/api/customers", requireAuth, async (req, res) => {
   const { search, tier } = req.query;
   const customers = await prisma.customer.findMany({
