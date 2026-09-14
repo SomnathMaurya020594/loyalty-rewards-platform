@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Env files — local .env stays out, production one is committed
+.env
+!.env.production

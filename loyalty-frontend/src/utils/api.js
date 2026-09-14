@@ -3,7 +3,7 @@
 // Kaha use hota hai: RulesPage, RewardsPage, CustomersPage, App.jsx (Dashboard) mein
 
 
-const API = "http://localhost:4000";
+const API = import.meta.env.VITE_API_URL;
 
 export async function authFetch(path, options = {}) {
   const token = localStorage.getItem("token");

@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import Section from "../components/Section";
 import Row from "../components/Row";
 
-const API = "http://localhost:4000";
+const API = import.meta.env.VITE_API_URL;
 
 function CustomerView() {
   const customerId = 1; // Abhi hardcoded — baad mein login se aayega
