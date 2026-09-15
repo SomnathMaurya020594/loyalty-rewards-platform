@@ -1,10 +1,5 @@
 // File: CustomerView.jsx
-// What this is: The customer-facing dashboard — shows their points, tier, rewards, and history.
-// Where it's used: App.jsx renders this on the "/customer" route.
-//
-// This version keeps the exact same data/behavior as before (same API calls, same redeem flow,
-// same hardcoded customerId until real customer login exists) — only the visual layer changed
-// to match the polished mock design (dark header banner, styled reward cards, progress bar).
+
 
 import { useState, useEffect } from "react";
 

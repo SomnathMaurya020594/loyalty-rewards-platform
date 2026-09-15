@@ -1,6 +1,5 @@
 // File: CustomersPage.jsx
-// Kya hai: Customers ki list — search bar aur tier filter ke saath
-// Kaha use hota hai: App.jsx mein "/customers" route pe
+
 
 import { useState, useEffect } from "react";
 import { authFetch } from "../utils/api";

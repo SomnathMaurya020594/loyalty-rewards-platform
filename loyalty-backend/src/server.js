@@ -10,6 +10,14 @@ const rateLimit = require("express-rate-limit");
 const app = express();
 const prisma = new PrismaClient();
 
+async function logActivity(type, event, detail = "") {
+  try {
+    await prisma.activityLog.create({ data: { type, event, detail: String(detail).slice(0, 500) } });
+  } catch (err) {
+    console.error("Failed to write activity log:", err.message);
+  }
+}
+
 app.set("trust proxy", 1); 
 app.use(express.json({
   verify: (req, res, buf) => {
@@ -17,6 +25,21 @@ app.use(express.json({
   }
 }));
 app.use(cors());
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/")) {
+    logActivity("API", `${req.method} ${req.path}`);
+  }
+  next();
+});
+
+app.get("/api/logs", requireAuth, async (req, res) => {
+  const logs = await prisma.activityLog.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  res.json(logs);
+});
 app.use(helmet());
 
 app.use(cors({
@@ -565,6 +588,12 @@ app.get("/api/analytics/summary", requireAuth, async (req, res) => {
   }
 });
 
+
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  logActivity("ERROR", `${req.method} ${req.path}`, err.message);
+  res.status(500).json({ error: "Something went wrong on our end" });
+});
 
 app.listen(PORT, () => {
   console.log(`Server started on http://localhost:${PORT}`);

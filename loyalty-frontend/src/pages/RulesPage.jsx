@@ -1,6 +1,5 @@
 // File: RulesPage.jsx
-// Kya hai: Loyalty Rules ka poora management page — Create, Edit, Delete, Toggle
-// Kaha use hota hai: App.jsx mein "/rules" route pe
+
 
 import { useState, useEffect } from "react";
 import { authFetch } from "../utils/api";

@@ -1,6 +1,5 @@
 // File: LoginPage.jsx
-// Kya hai: Merchant login form — email/password lekar backend se token lata hai
-// Kaha use hota hai: App.jsx mein "/login" route pe
+
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";

@@ -1,6 +1,5 @@
 // File: RewardsPage.jsx
-// Kya hai: Rewards ka poora management page — Create, Edit, Delete, Toggle
-// Kaha use hota hai: App.jsx mein "/rewards" route pe
+
 
 import { useState, useEffect } from "react";
 import { authFetch } from "../utils/api";

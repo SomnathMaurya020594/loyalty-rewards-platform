@@ -1,6 +1,5 @@
 // File: TiersPage.jsx
-// Kya hai: Merchant yahan loyalty tiers configure karta hai — Create, Edit, Delete, Enable/Disable.
-// Bilkul RulesPage.jsx jaisa hi CRUD pattern hai, bas "points" ki jagah "minPoints" hai.
+
 //
 // Kaha use hota hai: App.jsx mein "/tiers" route pe.
 
