@@ -15,6 +15,7 @@ model Customer {
   currentPoints  Int      @default(0)
   lifetimePoints Int      @default(0)
   redeemedPoints Int      @default(0)
+  totalSpent        Float    @default(0) 
   tier              String   @default("Bronze")
   tierLocked        Boolean  @default(false)  
   createdAt      DateTime @default(now())

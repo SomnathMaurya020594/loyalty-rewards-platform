@@ -1,9 +1,5 @@
 // File: App.jsx
-// Kya hai: Main entry — routes + Merchant Dashboard (stats, rules/rewards panels,
-// recent redemptions, tiers panel, aur customers panel with search + tier filter)
-//
-// Naya is version mein: "/tiers" route (TiersPage) + Merchant Dashboard par ek
-// "Loyalty Tiers" panel jo configured tiers aur unke thresholds dikhata hai.
+
 
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Link, Navigate } from "react-router-dom";
@@ -14,6 +10,8 @@ import CustomersPage from "./pages/CustomersPage";
 import TiersPage from "./pages/TiersPage";
 import LoginPage from "./pages/LoginPage";
 import { authFetch } from "./utils/api";
+import WebhookLogsPage from "./pages/WebhookLogsPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 
 const TIERS = ["All", "Bronze", "Silver", "Gold", "Platinum"];
 const TIER_STYLES = {
@@ -27,12 +25,14 @@ function App() {
   return (
     <BrowserRouter>
       <nav className="bg-white border-b border-gray-200 px-8 py-4 flex gap-6 items-center">
-        <Link to="/" className="font-medium text-gray-900">Merchant Dashboard</Link>
-        <Link to="/customer" className="font-medium text-gray-900">Customer View</Link>
+        <Link to="/" className="font-medium text-gray-900">Merchant Dashboard</Link>       
         <Link to="/rules" className="font-medium text-gray-900">Rules</Link>
         <Link to="/rewards" className="font-medium text-gray-900">Rewards</Link>
         <Link to="/tiers" className="font-medium text-gray-900">Tiers</Link>
-        <Link to="/customers" className="font-medium text-gray-900">Customers</Link>
+        <Link to="/analytics" className="font-medium text-gray-900">Analytics</Link>
+          <Link to="/logs" className="font-medium text-gray-900">Webhook Logs</Link>
+        {/* <Link to="/customers" className="font-medium text-gray-900">Customers</Link> */}
+         <Link to="/customer" className="font-medium text-gray-900">Customer View</Link>
         <button
           onClick={() => {
             localStorage.removeItem("token");
@@ -46,12 +46,14 @@ function App() {
 
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={localStorage.getItem("token") ? <MerchantDashboard /> : <Navigate to="/login" />} />
-        <Route path="/customer" element={<CustomerView />} />
+        <Route path="/" element={localStorage.getItem("token") ? <MerchantDashboard /> : <Navigate to="/login" />} />      
         <Route path="/rules" element={localStorage.getItem("token") ? <RulesPage /> : <Navigate to="/login" />} />
         <Route path="/rewards" element={localStorage.getItem("token") ? <RewardsPage /> : <Navigate to="/login" />} />
         <Route path="/tiers" element={localStorage.getItem("token") ? <TiersPage /> : <Navigate to="/login" />} />
-        <Route path="/customers" element={localStorage.getItem("token") ? <CustomersPage /> : <Navigate to="/login" />} />
+        <Route path="/analytics" element={localStorage.getItem("token") ? <AnalyticsPage /> : <Navigate to="/login" />} />
+        <Route path="/logs" element={localStorage.getItem("token") ? <WebhookLogsPage /> : <Navigate to="/login" />} />
+        {/* <Route path="/customers" element={localStorage.getItem("token") ? <CustomersPage /> : <Navigate to="/login" />} /> */}
+          <Route path="/customer" element={<CustomerView />} />
       </Routes>
     </BrowserRouter>
   );

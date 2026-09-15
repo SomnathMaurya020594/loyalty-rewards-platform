@@ -499,24 +499,72 @@ app.post("/webhooks/orders-paid", async (req, res) => {
 });
 
 app.get("/api/analytics/summary", requireAuth, async (req, res) => {
-  const customers = await prisma.customer.findMany();
-  const rules = await prisma.loyaltyRule.findMany({ where: { isActive: true } });
+  try {
+    const customers = await prisma.customer.findMany();
+    const rules = await prisma.loyaltyRule.findMany({ where: { isActive: true } });
 
-  const totalMembers = customers.length;
-  const totalPointsIssued = customers.reduce((sum, c) => sum + c.lifetimePoints, 0);
-  const totalPointsRedeemed = customers.reduce((sum, c) => sum + c.redeemedPoints, 0);
-  const activeCampaigns = rules.length;
-  const redemptionRate =
-    totalPointsIssued > 0 ? ((totalPointsRedeemed / totalPointsIssued) * 100).toFixed(1) : 0;
+    const totalMembers = customers.length;
+    const totalPointsIssued = customers.reduce((sum, c) => sum + c.lifetimePoints, 0);
+    const totalPointsRedeemed = customers.reduce((sum, c) => sum + c.redeemedPoints, 0);
+    const totalRevenue = customers.reduce((sum, c) => sum + (c.totalSpent || 0), 0);
+    const activeCampaigns = rules.length;
+    const redemptionRate =
+      totalPointsIssued > 0 ? Number(((totalPointsRedeemed / totalPointsIssued) * 100).toFixed(1)) : 0;
 
-  res.json({
-    totalMembers,
-    totalPointsIssued,
-    totalPointsRedeemed,
-    activeCampaigns,
-    redemptionRate: Number(redemptionRate),
-  });
+    // Top 5 customers by lifetime points
+    const topCustomers = [...customers]
+      .sort((a, b) => b.lifetimePoints - a.lifetimePoints)
+      .slice(0, 5)
+      .map((c) => ({
+        name: c.name,
+        lifetimePoints: c.lifetimePoints,
+        totalSpent: c.totalSpent || 0,
+        tier: c.tier,
+      }));
+
+    // Active members = customers with at least one transaction in the last 30 days
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const recentTransactions = await prisma.transaction.findMany({
+      where: { createdAt: { gte: thirtyDaysAgo } },
+      select: { customerId: true },
+      distinct: ["customerId"],
+    });
+    const activeMembers = recentTransactions.length;
+
+    // Monthly growth = new members created this calendar month vs last calendar month
+    const now = new Date();
+    const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const newThisMonth = customers.filter((c) => new Date(c.createdAt) >= startOfThisMonth).length;
+    const newLastMonth = customers.filter(
+      (c) => new Date(c.createdAt) >= startOfLastMonth && new Date(c.createdAt) < startOfThisMonth
+    ).length;
+
+    const monthlyGrowth =
+      newLastMonth > 0
+        ? Number((((newThisMonth - newLastMonth) / newLastMonth) * 100).toFixed(1))
+        : newThisMonth > 0
+        ? 100
+        : 0;
+
+    res.json({
+      totalMembers,
+      totalPointsIssued,
+      totalPointsRedeemed,
+      activeCampaigns,
+      redemptionRate,
+      totalRevenue,
+      topCustomers,
+      activeMembers,
+      monthlyGrowth,
+    });
+  } catch (err) {
+    await logActivity("ERROR", "GET /api/analytics/summary", err.message);
+    res.status(500).json({ error: "Failed to load analytics" });
+  }
 });
+
 
 app.listen(PORT, () => {
   console.log(`Server started on http://localhost:${PORT}`);
