@@ -679,24 +679,50 @@ app.post("/webhooks/orders-refunded", async (req, res) => {
   }
 });
 
+ 
 app.post("/webhooks/customers-create", async (req, res) => {
   if (!verifyShopifyWebhook(req)) {
     await logActivity("WEBHOOK", "customers/create", "HMAC verification failed");
     return res.status(401).send("Unauthorized");
   }
-
+ 
   try {
     const shopifyCustomerId = String(req.body.id);
     const existing = await prisma.customer.findUnique({ where: { shopifyCustomerId } });
+ 
     if (!existing) {
-      await prisma.customer.create({
+      // Look up the "Signup" rule — same pattern as the "Purchase" rule lookup
+      // in the orders-paid webhook.
+      const signupRule = await prisma.loyaltyRule.findFirst({
+        where: { name: "Signup", isActive: true },
+      });
+      const signupPoints = signupRule ? signupRule.points : 0;
+ 
+      const newCustomer = await prisma.customer.create({
         data: {
           shopifyCustomerId,
           name: `${req.body.first_name || "Shopify"} ${req.body.last_name || "Customer"}`,
           email: req.body.email || `customer-${shopifyCustomerId}@unknown.com`,
+          currentPoints: signupPoints,
+          lifetimePoints: signupPoints,
+          tier: signupPoints > 0 ? await calculateTierFromDb(signupPoints) : "Bronze",
         },
       });
-      await logActivity("WEBHOOK", "customers/create", `Created customer ${shopifyCustomerId}`);
+ 
+      // Record it as a transaction too, so it shows up in their history —
+      // same as any other points-earning event.
+      if (signupPoints > 0) {
+        await prisma.transaction.create({
+          data: {
+            customerId: newCustomer.id,
+            type: "EARN",
+            points: signupPoints,
+            note: "Signup bonus",
+          },
+        });
+      }
+ 
+      await logActivity("WEBHOOK", "customers/create", `Created customer ${shopifyCustomerId}, awarded ${signupPoints} signup pts`);
     }
     res.json({ status: "processed" });
   } catch (err) {
