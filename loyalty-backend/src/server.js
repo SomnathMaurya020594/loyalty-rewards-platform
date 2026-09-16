@@ -272,30 +272,42 @@ await prisma.customer.update({
 });
 
 app.get("/api/customers", requireAuth, async (req, res) => {
-  const { search, tier, page = 1, limit = 8 } = req.query;
+  try {
+    const { search, tier, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
 
-  const pageNum = Number(page);
-  const limitNum = Number(limit);
-  const skip = (pageNum - 1) * limitNum;
+    const where = {
+      AND: [
+        search
+          ? { OR: [{ name: { contains: search } }, { email: { contains: search } }] }
+          : {},
+        tier ? { tier } : {},
+      ],
+    };
 
-  const where = {
-    AND: [
-      search
-        ? { OR: [{ name: { contains: search } }, { email: { contains: search } }] }
-        : {},
-      tier && tier !== "All" ? { tier } : {},
-    ],
-  };
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({
+        where,
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+      }),
+      prisma.customer.count({ where }),
+    ]);
 
-  const [customers, totalCount] = await Promise.all([
-    prisma.customer.findMany({ where, skip, take: limitNum, orderBy: { createdAt: "desc" } }),
-    prisma.customer.count({ where }),
-  ]);
-
-  res.json({
-    data: customers,
-    pagination: { page: pageNum, totalPages: Math.ceil(totalCount / limitNum) },
-  });
+    res.json({
+      data: customers,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      },
+    });
+  } catch (err) {
+    await logActivity("ERROR", "GET /api/customers", err.message);
+    res.status(500).json({ error: "Failed to load customers" });
+  }
 });
 
 app.post("/api/customers", requireAuth, async (req, res) => {
