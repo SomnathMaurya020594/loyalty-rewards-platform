@@ -72,6 +72,8 @@ function MerchantDashboard() {
   const [customersLoading, setCustomersLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [tier, setTier] = useState("All");
+  const [custPage, setCustPage] = useState(1);
+const [custTotalPages, setCustTotalPages] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,21 +105,25 @@ function MerchantDashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      setCustomersLoading(true);
-      const params = new URLSearchParams();
-      if (search) params.append("search", search);
-      if (tier !== "All") params.append("tier", tier);
+useEffect(() => {
+  const timeout = setTimeout(() => {
+    setCustomersLoading(true);
+    const params = new URLSearchParams();
+    if (search) params.append("search", search);
+    if (tier !== "All") params.append("tier", tier);
+    params.append("page", custPage);
 
-      authFetch(`/api/customers?${params.toString()}`)
-        .then((res) => (res ? res.json() : []))
-        .then(setCustomers)
-        .finally(() => setCustomersLoading(false));
-    }, 300);
+    authFetch(`/api/customers?${params.toString()}`)
+      .then((res) => (res ? res.json() : { data: [], pagination: { totalPages: 1 } }))
+      .then((result) => {
+        setCustomers(result.data);
+        setCustTotalPages(result.pagination.totalPages);
+      })
+      .finally(() => setCustomersLoading(false));
+  }, 300);
 
-    return () => clearTimeout(timeout);
-  }, [search, tier]);
+  return () => clearTimeout(timeout);
+}, [search, tier, custPage]);
 
   if (loading) {
     return (
@@ -236,13 +242,13 @@ function MerchantDashboard() {
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setCustPage(1); }}
               placeholder="Search customers..."
               className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-48"
             />
             <select
               value={tier}
-              onChange={(e) => setTier(e.target.value)}
+              onChange={(e) => { setTier(e.target.value); setCustPage(1); }}
               className="border border-gray-300 rounded-md px-3 py-1.5 text-sm"
             >
               {TIERS.map((t) => (
@@ -258,25 +264,48 @@ function MerchantDashboard() {
           <div className="text-center py-6 text-gray-400 text-sm">
             {search || tier !== "All" ? "No customers match your search/filter." : "No customers yet."}
           </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {customers.slice(0, 8).map((c) => (
-              <div key={c.id} className="flex justify-between items-center py-2 text-sm">
-                <span className="text-gray-800">{c.name} ({c.email})</span>
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                      TIER_STYLES[c.tier] || "text-gray-600 bg-gray-100"
-                    }`}
-                  >
-                    {c.tier}
-                  </span>
-                  <span className="text-purple-600 font-medium">{c.currentPoints} pts</span>
-                </div>
-              </div>
-            ))}
+) : (
+  <>
+    <div className="divide-y divide-gray-100">
+      {customers.map((c) => (
+        <div key={c.id} className="flex justify-between items-center py-2 text-sm">
+          <span className="text-gray-800">{c.name} ({c.email})</span>
+          <div className="flex items-center gap-3">
+            <span
+              className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                TIER_STYLES[c.tier] || "text-gray-600 bg-gray-100"
+              }`}
+            >
+              {c.tier}
+            </span>
+            <span className="text-purple-600 font-medium">{c.currentPoints} pts</span>
           </div>
-        )}
+        </div>
+      ))}
+    </div>
+
+    {custTotalPages > 1 && (
+      <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-100">
+        <button
+          onClick={() => setCustPage((p) => Math.max(1, p - 1))}
+          disabled={custPage === 1}
+          className="text-sm text-purple-600 disabled:text-gray-300"
+        >
+          ← Previous
+        </button>
+        <span className="text-xs text-gray-400">Page {custPage} of {custTotalPages}</span>
+        <button
+          onClick={() => setCustPage((p) => Math.min(custTotalPages, p + 1))}
+          disabled={custPage === custTotalPages}
+          className="text-sm text-purple-600 disabled:text-gray-300"
+        >
+          Next →
+        </button>
+      </div>
+    )}
+  </>
+)}
+       
       </div>
     </div>
   );

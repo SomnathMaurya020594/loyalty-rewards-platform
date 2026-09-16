@@ -24,7 +24,7 @@ app.use(express.json({
     req.rawBody = buf; // raw body ko bhi save kar liya, verification ke liye
   }
 }));
-app.use(cors());
+// app.use(cors());
 
 app.use((req, res, next) => {
   if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/")) {
@@ -256,37 +256,46 @@ async function calculateTierFromDb(lifetimePoints) {
 // points are updated, replace that block with this:
 // ─────────────────────────────────────────────────────────────
 
-/*
-    const newLifetimePoints = customer.lifetimePoints + pointsEarned;
+const newLifetimePoints = customer.lifetimePoints + pointsEarned;
+const newTier = customer.tierLocked
+  ? customer.tier
+  : await calculateTierFromDb(newLifetimePoints);
 
-    // Only auto-update the tier if the merchant hasn't manually locked it.
-    const newTier = customer.tierLocked
-      ? customer.tier
-      : await calculateTierFromDb(newLifetimePoints);
-
-    await prisma.customer.update({
-      where: { id: customer.id },
-      data: {
-        currentPoints: customer.currentPoints + pointsEarned,
-        lifetimePoints: newLifetimePoints,
-        tier: newTier,
-      },
-    });
-*/
+await prisma.customer.update({
+  where: { id: customer.id },
+  data: {
+    currentPoints: customer.currentPoints + pointsEarned,
+    lifetimePoints: newLifetimePoints,
+    totalSpent: customer.totalSpent + totalPrice,   // 👈 Bug 2 ka fix bhi yahin
+    tier: newTier,
+  },
+});
 
 app.get("/api/customers", requireAuth, async (req, res) => {
-  const { search, tier } = req.query;
-  const customers = await prisma.customer.findMany({
-    where: {
-      AND: [
-        search
-          ? { OR: [{ name: { contains: search } }, { email: { contains: search } }] }
-          : {},
-        tier ? { tier } : {},
-      ],
-    },
+  const { search, tier, page = 1, limit = 8 } = req.query;
+
+  const pageNum = Number(page);
+  const limitNum = Number(limit);
+  const skip = (pageNum - 1) * limitNum;
+
+  const where = {
+    AND: [
+      search
+        ? { OR: [{ name: { contains: search } }, { email: { contains: search } }] }
+        : {},
+      tier && tier !== "All" ? { tier } : {},
+    ],
+  };
+
+  const [customers, totalCount] = await Promise.all([
+    prisma.customer.findMany({ where, skip, take: limitNum, orderBy: { createdAt: "desc" } }),
+    prisma.customer.count({ where }),
+  ]);
+
+  res.json({
+    data: customers,
+    pagination: { page: pageNum, totalPages: Math.ceil(totalCount / limitNum) },
   });
-  res.json(customers);
 });
 
 app.post("/api/customers", requireAuth, async (req, res) => {
