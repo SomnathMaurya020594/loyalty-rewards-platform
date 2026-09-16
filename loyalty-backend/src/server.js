@@ -429,6 +429,22 @@ app.get("/api/customers/by-shopify-id/:shopifyId", async (req, res) => {
   }
   res.json(customer);
 });
+
+ 
+app.get("/api/customers/by-shopify-id/:shopifyId/redemptions", async (req, res) => {
+  const customer = await prisma.customer.findUnique({
+    where: { shopifyCustomerId: req.params.shopifyId },
+  });
+  if (!customer) return res.json([]);
+ 
+  const redemptions = await prisma.rewardRedemption.findMany({
+    where: { customerId: customer.id },
+    include: { reward: true },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(redemptions);
+});
+ 
  
 app.get("/api/customers/by-shopify-id/:shopifyId/transactions", async (req, res) => {
   const customer = await prisma.customer.findUnique({
