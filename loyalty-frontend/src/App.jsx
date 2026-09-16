@@ -113,13 +113,13 @@ useEffect(() => {
     if (tier !== "All") params.append("tier", tier);
     params.append("page", custPage);
 
-    authFetch(`/api/customers?${params.toString()}`)
-      .then((res) => (res ? res.json() : { data: [], pagination: { totalPages: 1 } }))
-      .then((result) => {
-        setCustomers(result.data);
-        setCustTotalPages(result.pagination.totalPages);
-      })
-      .finally(() => setCustomersLoading(false));
+   authFetch(`/api/customers?${params.toString()}`)
+  .then((res) => (res ? res.json() : { data: [], pagination: { totalPages: 1 } }))
+  .then((result) => {
+    setCustomers(result?.data || []);
+    setCustTotalPages(result?.pagination?.totalPages || 1);
+  })
+  .finally(() => setCustomersLoading(false));
   }, 300);
 
   return () => clearTimeout(timeout);

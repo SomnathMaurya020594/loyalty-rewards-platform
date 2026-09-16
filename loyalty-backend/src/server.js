@@ -361,14 +361,20 @@ app.post("/api/redemption", async (req, res) => {
     code = "LOOP-" + Math.random().toString(36).substring(2, 8).toUpperCase();
   }
 
-  const updatedCustomer = await prisma.customer.update({
-    where: { id: customerId },
-    data: {
-      currentPoints: customer.currentPoints - reward.pointsCost,
-      redeemedPoints: customer.redeemedPoints + reward.pointsCost,
-    },
-  });
+const newLifetimePoints = customer.lifetimePoints + pointsEarned;
+const newTier = customer.tierLocked
+  ? customer.tier
+  : await calculateTierFromDb(newLifetimePoints);
 
+await prisma.customer.update({
+  where: { id: customer.id },
+  data: {
+    currentPoints: customer.currentPoints + pointsEarned,
+    lifetimePoints: newLifetimePoints,
+    totalSpent: customer.totalSpent + totalPrice,
+    tier: newTier,
+  },
+});
   const redemption = await prisma.rewardRedemption.create({
     data: {
       customerId,
