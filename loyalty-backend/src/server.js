@@ -29,23 +29,8 @@ app.use(express.json({
 app.use(helmet());
 
 // Sirf ek baar CORS setup — sirf apna frontend allow karo
-// app.use(cors({
-//   origin: process.env.FRONTEND_URL || "http://localhost:5173",
-// }));
-
-const allowedOrigins = [
-  process.env.FRONTEND_URL || "http://localhost:5173",
-  `https://${process.env.SHOPIFY_STORE_URL}`,
-];
-
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
 }));
 
 app.use((req, res, next) => {
@@ -417,43 +402,9 @@ app.get("/api/customers/:id", async (req, res) => {
   res.json(customer);
 });
 
- 
-app.get("/api/customers/by-shopify-id/:shopifyId", async (req, res) => {
-  const customer = await prisma.customer.findUnique({
-    where: { shopifyCustomerId: req.params.shopifyId },
-  });
-  if (!customer) {
-    // Not an error — this just means they haven't earned points yet
-    // (no order has come through the webhook for them).
-    return res.status(404).json({ error: "No loyalty account yet — place an order to start earning points!" });
-  }
-  res.json(customer);
-});
-
- 
-app.get("/api/customers/by-shopify-id/:shopifyId/redemptions", async (req, res) => {
-  const customer = await prisma.customer.findUnique({
-    where: { shopifyCustomerId: req.params.shopifyId },
-  });
-  if (!customer) return res.json([]);
- 
-  const redemptions = await prisma.rewardRedemption.findMany({
-    where: { customerId: customer.id },
-    include: { reward: true },
-    orderBy: { createdAt: "desc" },
-  });
-  res.json(redemptions);
-});
- 
- 
-app.get("/api/customers/by-shopify-id/:shopifyId/transactions", async (req, res) => {
-  const customer = await prisma.customer.findUnique({
-    where: { shopifyCustomerId: req.params.shopifyId },
-  });
-  if (!customer) return res.json([]);
- 
+app.get("/api/customers/:id/transactions", async (req, res) => {
   const transactions = await prisma.transaction.findMany({
-    where: { customerId: customer.id },
+    where: { customerId: Number(req.params.id) },
     orderBy: { createdAt: "desc" },
   });
   res.json(transactions);
@@ -486,30 +437,21 @@ app.get("/api/redemptions", requireAuth, async (req, res) => {
 // currentPoints and increases redeemedPoints.
 app.post("/api/redemption", async (req, res) => {
   try {
-    const { customerId, rewardId, shopifyCustomerId } = req.body;
- 
-    // At least one way to identify the customer is required, plus a rewardId.
-    if ((!customerId && !shopifyCustomerId) || !rewardId) {
-      return res.status(400).json({ error: "customerId (or shopifyCustomerId) and rewardId are required" });
+    const { customerId, rewardId } = req.body;
+    if (!customerId || !rewardId) {
+      return res.status(400).json({ error: "customerId and rewardId are required" });
     }
- 
-    // Look up the customer by whichever identifier was provided.
-    const customer = customerId
-      ? await prisma.customer.findUnique({ where: { id: Number(customerId) } })
-      : await prisma.customer.findUnique({ where: { shopifyCustomerId: String(shopifyCustomerId) } });
- 
+
+    const customer = await prisma.customer.findUnique({ where: { id: Number(customerId) } });
     const reward = await prisma.reward.findUnique({ where: { id: Number(rewardId) } });
- 
+
     if (!customer) return res.status(404).json({ error: "Customer not found" });
     if (!reward) return res.status(404).json({ error: "Reward not found" });
     if (!reward.isActive) return res.status(400).json({ error: "This reward is no longer active" });
     if (customer.currentPoints < reward.pointsCost) {
       return res.status(400).json({ error: "Not enough points" });
     }
- 
-    // Try to generate a real, customer-locked Shopify discount code.
-    // If that fails for any reason, fall back to a random local code so the
-    // redemption still completes (this is logged as an error for visibility).
+
     let code;
     try {
       code = await createShopifyDiscountCode(reward, customer.shopifyCustomerId);
@@ -517,9 +459,7 @@ app.post("/api/redemption", async (req, res) => {
       await logActivity("ERROR", "createShopifyDiscountCode", err.message);
       code = "LOOP-" + Math.random().toString(36).substring(2, 8).toUpperCase();
     }
- 
-    // Deduct the reward's cost from the customer's spendable balance, and
-    // add it to their redeemed-points total (used for redemption-rate analytics).
+
     const updatedCustomer = await prisma.customer.update({
       where: { id: customer.id },
       data: {
@@ -527,9 +467,7 @@ app.post("/api/redemption", async (req, res) => {
         redeemedPoints: customer.redeemedPoints + reward.pointsCost,
       },
     });
- 
-    // Record the redemption itself — status starts PENDING and later flips to
-    // APPLIED by the orders-paid webhook once the code is actually used at checkout.
+
     const redemption = await prisma.rewardRedemption.create({
       data: {
         customerId: customer.id,
@@ -539,7 +477,7 @@ app.post("/api/redemption", async (req, res) => {
         status: "PENDING",
       },
     });
- 
+
     res.status(201).json({ redemption, remainingPoints: updatedCustomer.currentPoints });
   } catch (err) {
     await logActivity("ERROR", "POST /api/redemption", err.message);
@@ -695,50 +633,24 @@ app.post("/webhooks/orders-refunded", async (req, res) => {
   }
 });
 
- 
 app.post("/webhooks/customers-create", async (req, res) => {
   if (!verifyShopifyWebhook(req)) {
     await logActivity("WEBHOOK", "customers/create", "HMAC verification failed");
     return res.status(401).send("Unauthorized");
   }
- 
+
   try {
     const shopifyCustomerId = String(req.body.id);
     const existing = await prisma.customer.findUnique({ where: { shopifyCustomerId } });
- 
     if (!existing) {
-      // Look up the "Signup" rule — same pattern as the "Purchase" rule lookup
-      // in the orders-paid webhook.
-      const signupRule = await prisma.loyaltyRule.findFirst({
-        where: { name: "Signup", isActive: true },
-      });
-      const signupPoints = signupRule ? signupRule.points : 0;
- 
-      const newCustomer = await prisma.customer.create({
+      await prisma.customer.create({
         data: {
           shopifyCustomerId,
           name: `${req.body.first_name || "Shopify"} ${req.body.last_name || "Customer"}`,
           email: req.body.email || `customer-${shopifyCustomerId}@unknown.com`,
-          currentPoints: signupPoints,
-          lifetimePoints: signupPoints,
-          tier: signupPoints > 0 ? await calculateTierFromDb(signupPoints) : "Bronze",
         },
       });
- 
-      // Record it as a transaction too, so it shows up in their history —
-      // same as any other points-earning event.
-      if (signupPoints > 0) {
-        await prisma.transaction.create({
-          data: {
-            customerId: newCustomer.id,
-            type: "EARN",
-            points: signupPoints,
-            note: "Signup bonus",
-          },
-        });
-      }
- 
-      await logActivity("WEBHOOK", "customers/create", `Created customer ${shopifyCustomerId}, awarded ${signupPoints} signup pts`);
+      await logActivity("WEBHOOK", "customers/create", `Created customer ${shopifyCustomerId}`);
     }
     res.json({ status: "processed" });
   } catch (err) {
