@@ -32,7 +32,7 @@ function App() {
         <Link to="/analytics" className="font-medium text-gray-900">Analytics</Link>
           <Link to="/logs" className="font-medium text-gray-900">Webhook Logs</Link>
         {/* <Link to="/customers" className="font-medium text-gray-900">Customers</Link> */}
-         <Link to="/customer" className="font-medium text-gray-900">Customer View</Link>
+         {/* <Link to="/customer" className="font-medium text-gray-900">Customer View</Link> */}
         <button
           onClick={() => {
             localStorage.removeItem("token");
@@ -53,7 +53,7 @@ function App() {
         <Route path="/analytics" element={localStorage.getItem("token") ? <AnalyticsPage /> : <Navigate to="/login" />} />
         <Route path="/logs" element={localStorage.getItem("token") ? <WebhookLogsPage /> : <Navigate to="/login" />} />
         {/* <Route path="/customers" element={localStorage.getItem("token") ? <CustomersPage /> : <Navigate to="/login" />} /> */}
-          <Route path="/customer" element={<CustomerView />} />
+          {/* <Route path="/customer" element={<CustomerView />} /> */}
       </Routes>
     </BrowserRouter>
   );

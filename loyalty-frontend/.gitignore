@@ -26,3 +26,4 @@ dist-ssr
 # Env files — local .env stays out, production one is committed
 .env
 !.env.production
+backupserver.js
