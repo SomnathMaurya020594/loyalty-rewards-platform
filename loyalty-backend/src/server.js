@@ -10,6 +10,7 @@ const rateLimit = require("express-rate-limit");
 const app = express();
 const prisma = new PrismaClient();
 
+// Saves one activity log row to the database (used for API/WEBHOOK/ERROR events)
 async function logActivity(type, event, detail = "") {
   try {
     await prisma.activityLog.create({ data: { type, event, detail: String(detail).slice(0, 500) } });
@@ -18,21 +19,18 @@ async function logActivity(type, event, detail = "") {
   }
 }
 
+// Needed so express-rate-limit reads the real client IP behind Render's proxy
 app.set("trust proxy", 1);
 
 app.use(express.json({
   verify: (req, res, buf) => {
-    req.rawBody = buf; // raw body ko bhi save kar liya, verification ke liye
+    req.rawBody = buf; // keep the raw body too, needed for webhook signature check
   }
 }));
 
 app.use(helmet());
 
-// Sirf ek baar CORS setup — sirf apna frontend allow karo
-// app.use(cors({
-//   origin: process.env.FRONTEND_URL || "http://localhost:5173",
-// }));
-
+// Only allow requests from our own frontend and the Shopify store domain
 const allowedOrigins = [
   process.env.FRONTEND_URL || "http://localhost:5173",
   `https://${process.env.SHOPIFY_STORE_URL}`,
@@ -48,6 +46,7 @@ app.use(cors({
   },
 }));
 
+// Logs every API/webhook request that comes in
 app.use((req, res, next) => {
   if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/")) {
     logActivity("API", `${req.method} ${req.path}`);
@@ -70,6 +69,7 @@ const loginLimiter = rateLimit({
 
 const PORT = process.env.PORT || 4000;
 
+// Checks the JWT token on merchant-only routes
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
@@ -84,6 +84,7 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Confirms a webhook request really came from Shopify (HMAC signature check)
 function verifyShopifyWebhook(req) {
   const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
   const generatedHash = crypto
@@ -93,6 +94,7 @@ function verifyShopifyWebhook(req) {
   return generatedHash === hmacHeader;
 }
 
+// Works out which tier a customer belongs to, based on their lifetime points
 async function calculateTierFromDb(lifetimePoints) {
   const tiers = await prisma.tier.findMany({
     where: { isActive: true },
@@ -102,9 +104,11 @@ async function calculateTierFromDb(lifetimePoints) {
   for (const t of tiers) {
     if (lifetimePoints >= t.minPoints) matched = t.name;
   }
+  console.log("[calculateTierFromDb] lifetimePoints:", lifetimePoints, "-> matched tier:", matched);
   return matched;
 }
 
+// Creates a real, one-time, customer-locked Shopify discount code
 async function createShopifyDiscountCode(reward, shopifyCustomerId) {
   const code = "LOOP-" + Math.random().toString(36).substring(2, 8).toUpperCase();
   const percentage = reward.type === "PERCENTAGE_DISCOUNT" ? (reward.value || 10) / 100 : 0.1;
@@ -112,6 +116,8 @@ async function createShopifyDiscountCode(reward, shopifyCustomerId) {
   const customerSelection = shopifyCustomerId
     ? { customers: { add: [`gid://shopify/Customer/${shopifyCustomerId}`] } }
     : { all: true };
+
+  console.log("[createShopifyDiscountCode] reward:", reward, "| shopifyCustomerId:", shopifyCustomerId, "| generated code:", code);
 
   const mutation = `
     mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
@@ -147,6 +153,8 @@ async function createShopifyDiscountCode(reward, shopifyCustomerId) {
   );
 
   const data = await response.json();
+  console.log("[createShopifyDiscountCode] Shopify response:", JSON.stringify(data));
+
   if (data.data?.discountCodeBasicCreate?.userErrors?.length > 0) {
     throw new Error(data.data.discountCodeBasicCreate.userErrors[0].message);
   }
@@ -163,6 +171,8 @@ app.get("/", (req, res) => {
 
 app.post("/api/auth/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
+  console.log("[POST /api/auth/login] Login attempt for email:", email);
+
   if (email !== process.env.ADMIN_EMAIL) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
@@ -171,6 +181,7 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
     return res.status(401).json({ error: "Invalid credentials" });
   }
   const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+  console.log("[POST /api/auth/login] Login success for:", email);
   res.json({ token });
 });
 
@@ -183,6 +194,7 @@ app.get("/api/logs", requireAuth, async (req, res) => {
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+  console.log("[GET /api/logs] Returning", logs.length, "log rows");
   res.json(logs);
 });
 
@@ -192,12 +204,15 @@ app.get("/api/logs", requireAuth, async (req, res) => {
 
 app.get("/api/rules", requireAuth, async (req, res) => {
   const rules = await prisma.loyaltyRule.findMany();
+  console.log("[GET /api/rules] Returning", rules.length, "rules");
   res.json(rules);
 });
 
 app.post("/api/rules", requireAuth, async (req, res) => {
   try {
     const { name, points } = req.body;
+    console.log("[POST /api/rules] Incoming data:", { name, points });
+
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "Rule name is required" });
     }
@@ -205,8 +220,10 @@ app.post("/api/rules", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Points must be a positive number" });
     }
     const newRule = await prisma.loyaltyRule.create({ data: { name: name.trim(), points: Number(points) } });
+    console.log("[POST /api/rules] Created rule:", newRule);
     res.status(201).json(newRule);
   } catch (err) {
+    console.log("[POST /api/rules] Error:", err.message);
     await logActivity("ERROR", "POST /api/rules", err.message);
     res.status(500).json({ error: "Failed to create rule" });
   }
@@ -214,6 +231,7 @@ app.post("/api/rules", requireAuth, async (req, res) => {
 
 app.put("/api/rules/:id", requireAuth, async (req, res) => {
   const { name, points } = req.body;
+  console.log("[PUT /api/rules/:id] id:", req.params.id, "| data:", { name, points });
   const updated = await prisma.loyaltyRule.update({
     where: { id: Number(req.params.id) },
     data: { name, points },
@@ -227,10 +245,12 @@ app.patch("/api/rules/:id/toggle", requireAuth, async (req, res) => {
     where: { id: Number(req.params.id) },
     data: { isActive: !rule.isActive },
   });
+  console.log("[PATCH /api/rules/:id/toggle] rule:", req.params.id, "-> isActive:", updated.isActive);
   res.json(updated);
 });
 
 app.delete("/api/rules/:id", requireAuth, async (req, res) => {
+  console.log("[DELETE /api/rules/:id] Deleting rule:", req.params.id);
   await prisma.loyaltyRule.delete({ where: { id: Number(req.params.id) } });
   res.json({ success: true });
 });
@@ -241,12 +261,15 @@ app.delete("/api/rules/:id", requireAuth, async (req, res) => {
 
 app.get("/api/rewards", async (req, res) => {
   const rewards = await prisma.reward.findMany();
+  console.log("[GET /api/rewards] Returning", rewards.length, "rewards");
   res.json(rewards);
 });
 
 app.post("/api/rewards", requireAuth, async (req, res) => {
   try {
     const { name, type, pointsCost } = req.body;
+    console.log("[POST /api/rewards] Incoming data:", { name, type, pointsCost });
+
     const validTypes = ["PERCENTAGE_DISCOUNT", "FIXED_DISCOUNT", "FREE_SHIPPING", "FREE_PRODUCT"];
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "Reward name is required" });
@@ -258,8 +281,10 @@ app.post("/api/rewards", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Points cost must be a positive number" });
     }
     const newReward = await prisma.reward.create({ data: { name: name.trim(), type, pointsCost: Number(pointsCost) } });
+    console.log("[POST /api/rewards] Created reward:", newReward);
     res.status(201).json(newReward);
   } catch (err) {
+    console.log("[POST /api/rewards] Error:", err.message);
     await logActivity("ERROR", "POST /api/rewards", err.message);
     res.status(500).json({ error: "Failed to create reward" });
   }
@@ -267,6 +292,7 @@ app.post("/api/rewards", requireAuth, async (req, res) => {
 
 app.put("/api/rewards/:id", requireAuth, async (req, res) => {
   const { name, type, pointsCost } = req.body;
+  console.log("[PUT /api/rewards/:id] id:", req.params.id, "| data:", { name, type, pointsCost });
   const updated = await prisma.reward.update({
     where: { id: Number(req.params.id) },
     data: { name, type, pointsCost },
@@ -280,10 +306,12 @@ app.patch("/api/rewards/:id/toggle", requireAuth, async (req, res) => {
     where: { id: Number(req.params.id) },
     data: { isActive: !reward.isActive },
   });
+  console.log("[PATCH /api/rewards/:id/toggle] reward:", req.params.id, "-> isActive:", updated.isActive);
   res.json(updated);
 });
 
 app.delete("/api/rewards/:id", requireAuth, async (req, res) => {
+  console.log("[DELETE /api/rewards/:id] Deleting reward:", req.params.id);
   await prisma.reward.delete({ where: { id: Number(req.params.id) } });
   res.json({ success: true });
 });
@@ -294,22 +322,70 @@ app.delete("/api/rewards/:id", requireAuth, async (req, res) => {
 
 app.get("/api/tiers", requireAuth, async (req, res) => {
   const tiers = await prisma.tier.findMany({ orderBy: { minPoints: "asc" } });
+  console.log("[GET /api/tiers] Returning", tiers.length, "tiers");
   res.json(tiers);
 });
 
+// UPDATED: now validates name + minPoints, and blocks duplicate tier names
 app.post("/api/tiers", requireAuth, async (req, res) => {
-  const { name, minPoints } = req.body;
-  const newTier = await prisma.tier.create({ data: { name, minPoints: Number(minPoints) } });
-  res.json(newTier);
+  try {
+    const { name, minPoints } = req.body;
+    console.log("[POST /api/tiers] Incoming data:", { name, minPoints });
+
+    // Name must be a real, non-empty string
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "Tier name is required" });
+    }
+
+    // minPoints must be a valid number and cannot be negative
+    if (minPoints === undefined || isNaN(Number(minPoints)) || Number(minPoints) < 0) {
+      return res.status(400).json({ error: "Minimum points must be a number 0 or higher" });
+    }
+
+    // Don't allow two tiers with the same name (avoids confusing duplicates)
+    const existingTier = await prisma.tier.findFirst({ where: { name: name.trim() } });
+    if (existingTier) {
+      return res.status(409).json({ error: "A tier with this name already exists" });
+    }
+
+    const newTier = await prisma.tier.create({
+      data: { name: name.trim(), minPoints: Number(minPoints) },
+    });
+
+    console.log("[POST /api/tiers] Created tier:", newTier);
+    res.status(201).json(newTier);
+  } catch (err) {
+    console.log("[POST /api/tiers] Error:", err.message);
+    await logActivity("ERROR", "POST /api/tiers", err.message);
+    res.status(500).json({ error: "Failed to create tier" });
+  }
 });
 
+// UPDATED: now validates name + minPoints before updating
 app.put("/api/tiers/:id", requireAuth, async (req, res) => {
-  const { name, minPoints } = req.body;
-  const updated = await prisma.tier.update({
-    where: { id: Number(req.params.id) },
-    data: { name, minPoints: Number(minPoints) },
-  });
-  res.json(updated);
+  try {
+    const { name, minPoints } = req.body;
+    console.log("[PUT /api/tiers/:id] id:", req.params.id, "| data:", { name, minPoints });
+
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "Tier name is required" });
+    }
+    if (minPoints === undefined || isNaN(Number(minPoints)) || Number(minPoints) < 0) {
+      return res.status(400).json({ error: "Minimum points must be a number 0 or higher" });
+    }
+
+    const updated = await prisma.tier.update({
+      where: { id: Number(req.params.id) },
+      data: { name: name.trim(), minPoints: Number(minPoints) },
+    });
+
+    console.log("[PUT /api/tiers/:id] Updated tier:", updated);
+    res.json(updated);
+  } catch (err) {
+    console.log("[PUT /api/tiers/:id] Error:", err.message);
+    await logActivity("ERROR", "PUT /api/tiers/:id", err.message);
+    res.status(500).json({ error: "Failed to update tier" });
+  }
 });
 
 app.patch("/api/tiers/:id/toggle", requireAuth, async (req, res) => {
@@ -318,24 +394,49 @@ app.patch("/api/tiers/:id/toggle", requireAuth, async (req, res) => {
     where: { id: Number(req.params.id) },
     data: { isActive: !tier.isActive },
   });
+  console.log("[PATCH /api/tiers/:id/toggle] tier:", req.params.id, "-> isActive:", updated.isActive);
   res.json(updated);
 });
 
 app.delete("/api/tiers/:id", requireAuth, async (req, res) => {
+  console.log("[DELETE /api/tiers/:id] Deleting tier:", req.params.id);
   await prisma.tier.delete({ where: { id: Number(req.params.id) } });
   res.json({ success: true });
 });
 
+// UPDATED: now validates the tier name and checks that tier actually exists
 app.patch("/api/customers/:id/tier", requireAuth, async (req, res) => {
-  const { tier, locked } = req.body;
-  const updated = await prisma.customer.update({
-    where: { id: Number(req.params.id) },
-    data: { tier, tierLocked: locked ?? true },
-  });
-  res.json(updated);
+  try {
+    const { tier, locked } = req.body;
+    console.log("[PATCH /api/customers/:id/tier] customerId:", req.params.id, "| data:", { tier, locked });
+
+    if (!tier || typeof tier !== "string" || !tier.trim()) {
+      return res.status(400).json({ error: "Tier name is required" });
+    }
+
+    // Only allow setting a tier that actually exists — stops a merchant from
+    // accidentally assigning a customer to a tier name that was never created
+    const tierExists = await prisma.tier.findFirst({ where: { name: tier.trim() } });
+    if (!tierExists) {
+      return res.status(400).json({ error: "This tier does not exist. Create it first." });
+    }
+
+    const updated = await prisma.customer.update({
+      where: { id: Number(req.params.id) },
+      data: { tier: tier.trim(), tierLocked: locked ?? true },
+    });
+
+    console.log("[PATCH /api/customers/:id/tier] Updated customer:", updated);
+    res.json(updated);
+  } catch (err) {
+    console.log("[PATCH /api/customers/:id/tier] Error:", err.message);
+    await logActivity("ERROR", "PATCH /api/customers/:id/tier", err.message);
+    res.status(500).json({ error: "Failed to update customer tier" });
+  }
 });
 
 app.patch("/api/customers/:id/tier/unlock", requireAuth, async (req, res) => {
+  console.log("[PATCH /api/customers/:id/tier/unlock] customerId:", req.params.id);
   const updated = await prisma.customer.update({
     where: { id: Number(req.params.id) },
     data: { tierLocked: false },
@@ -352,6 +453,8 @@ app.get("/api/customers", requireAuth, async (req, res) => {
     const { search, tier, page = 1, limit = 20 } = req.query;
     const pageNum = Math.max(1, Number(page));
     const limitNum = Math.max(1, Number(limit));
+
+    console.log("[GET /api/customers] Query params:", { search, tier, page: pageNum, limit: limitNum });
 
     const where = {
       AND: [
@@ -371,6 +474,8 @@ app.get("/api/customers", requireAuth, async (req, res) => {
       prisma.customer.count({ where }),
     ]);
 
+    console.log("[GET /api/customers] Found", total, "total customers, returning page", pageNum);
+
     res.json({
       data: customers,
       pagination: {
@@ -381,6 +486,7 @@ app.get("/api/customers", requireAuth, async (req, res) => {
       },
     });
   } catch (err) {
+    console.log("[GET /api/customers] Error:", err.message);
     await logActivity("ERROR", "GET /api/customers", err.message);
     res.status(500).json({ error: "Failed to load customers" });
   }
@@ -389,6 +495,8 @@ app.get("/api/customers", requireAuth, async (req, res) => {
 app.post("/api/customers", requireAuth, async (req, res) => {
   try {
     const { name, email } = req.body;
+    console.log("[POST /api/customers] Incoming data:", { name, email });
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "Customer name is required" });
@@ -401,8 +509,10 @@ app.post("/api/customers", requireAuth, async (req, res) => {
       return res.status(409).json({ error: "A customer with this email already exists" });
     }
     const newCustomer = await prisma.customer.create({ data: { name: name.trim(), email } });
+    console.log("[POST /api/customers] Created customer:", newCustomer);
     res.status(201).json(newCustomer);
   } catch (err) {
+    console.log("[POST /api/customers] Error:", err.message);
     await logActivity("ERROR", "POST /api/customers", err.message);
     res.status(500).json({ error: "Failed to create customer" });
   }
@@ -410,6 +520,7 @@ app.post("/api/customers", requireAuth, async (req, res) => {
 
 // Public — customer dashboard reads its own data without a merchant JWT
 app.get("/api/customers/:id", async (req, res) => {
+  console.log("[GET /api/customers/:id] Looking up customer id:", req.params.id);
   const customer = await prisma.customer.findUnique({
     where: { id: Number(req.params.id) },
   });
@@ -417,45 +528,52 @@ app.get("/api/customers/:id", async (req, res) => {
   res.json(customer);
 });
 
- 
+
 app.get("/api/customers/by-shopify-id/:shopifyId", async (req, res) => {
+  console.log("[GET /api/customers/by-shopify-id/:shopifyId] Looking up shopifyId:", req.params.shopifyId);
   const customer = await prisma.customer.findUnique({
     where: { shopifyCustomerId: req.params.shopifyId },
   });
   if (!customer) {
     // Not an error — this just means they haven't earned points yet
     // (no order has come through the webhook for them).
+    console.log("[GET /api/customers/by-shopify-id/:shopifyId] No loyalty account found yet for:", req.params.shopifyId);
     return res.status(404).json({ error: "No loyalty account yet — place an order to start earning points!" });
   }
+  console.log("[GET /api/customers/by-shopify-id/:shopifyId] Found customer:", customer);
   res.json(customer);
 });
 
- 
+
 app.get("/api/customers/by-shopify-id/:shopifyId/redemptions", async (req, res) => {
+  console.log("[GET .../redemptions] shopifyId:", req.params.shopifyId);
   const customer = await prisma.customer.findUnique({
     where: { shopifyCustomerId: req.params.shopifyId },
   });
   if (!customer) return res.json([]);
- 
+
   const redemptions = await prisma.rewardRedemption.findMany({
     where: { customerId: customer.id },
     include: { reward: true },
     orderBy: { createdAt: "desc" },
   });
+  console.log("[GET .../redemptions] Found", redemptions.length, "redemptions");
   res.json(redemptions);
 });
- 
- 
+
+
 app.get("/api/customers/by-shopify-id/:shopifyId/transactions", async (req, res) => {
+  console.log("[GET .../transactions] shopifyId:", req.params.shopifyId);
   const customer = await prisma.customer.findUnique({
     where: { shopifyCustomerId: req.params.shopifyId },
   });
   if (!customer) return res.json([]);
- 
+
   const transactions = await prisma.transaction.findMany({
     where: { customerId: customer.id },
     orderBy: { createdAt: "desc" },
   });
+  console.log("[GET .../transactions] Found", transactions.length, "transactions");
   res.json(transactions);
 });
 
@@ -464,6 +582,7 @@ app.get("/api/customers/by-shopify-id/:shopifyId/transactions", async (req, res)
 // ═══════════════════════════════════════════════════════════
 
 app.get("/api/redemptions/:code", requireAuth, async (req, res) => {
+  console.log("[GET /api/redemptions/:code] Looking up code:", req.params.code);
   const redemption = await prisma.rewardRedemption.findFirst({
     where: { generatedCode: req.params.code },
     include: { customer: true, reward: true },
@@ -478,6 +597,7 @@ app.get("/api/redemptions", requireAuth, async (req, res) => {
     orderBy: { createdAt: "desc" },
     take: 50,
   });
+  console.log("[GET /api/redemptions] Returning", redemptions.length, "redemptions");
   res.json(redemptions);
 });
 
@@ -487,26 +607,29 @@ app.get("/api/redemptions", requireAuth, async (req, res) => {
 app.post("/api/redemption", async (req, res) => {
   try {
     const { customerId, rewardId, shopifyCustomerId } = req.body;
- 
+    console.log("[POST /api/redemption] Incoming data:", { customerId, rewardId, shopifyCustomerId });
+
     // At least one way to identify the customer is required, plus a rewardId.
     if ((!customerId && !shopifyCustomerId) || !rewardId) {
       return res.status(400).json({ error: "customerId (or shopifyCustomerId) and rewardId are required" });
     }
- 
+
     // Look up the customer by whichever identifier was provided.
     const customer = customerId
       ? await prisma.customer.findUnique({ where: { id: Number(customerId) } })
       : await prisma.customer.findUnique({ where: { shopifyCustomerId: String(shopifyCustomerId) } });
- 
+
     const reward = await prisma.reward.findUnique({ where: { id: Number(rewardId) } });
- 
+
+    console.log("[POST /api/redemption] Found customer:", customer, "| Found reward:", reward);
+
     if (!customer) return res.status(404).json({ error: "Customer not found" });
     if (!reward) return res.status(404).json({ error: "Reward not found" });
     if (!reward.isActive) return res.status(400).json({ error: "This reward is no longer active" });
     if (customer.currentPoints < reward.pointsCost) {
       return res.status(400).json({ error: "Not enough points" });
     }
- 
+
     // Try to generate a real, customer-locked Shopify discount code.
     // If that fails for any reason, fall back to a random local code so the
     // redemption still completes (this is logged as an error for visibility).
@@ -514,10 +637,11 @@ app.post("/api/redemption", async (req, res) => {
     try {
       code = await createShopifyDiscountCode(reward, customer.shopifyCustomerId);
     } catch (err) {
+      console.log("[POST /api/redemption] Shopify discount code creation failed, using fallback code. Error:", err.message);
       await logActivity("ERROR", "createShopifyDiscountCode", err.message);
       code = "LOOP-" + Math.random().toString(36).substring(2, 8).toUpperCase();
     }
- 
+
     // Deduct the reward's cost from the customer's spendable balance, and
     // add it to their redeemed-points total (used for redemption-rate analytics).
     const updatedCustomer = await prisma.customer.update({
@@ -527,7 +651,7 @@ app.post("/api/redemption", async (req, res) => {
         redeemedPoints: customer.redeemedPoints + reward.pointsCost,
       },
     });
- 
+
     // Record the redemption itself — status starts PENDING and later flips to
     // APPLIED by the orders-paid webhook once the code is actually used at checkout.
     const redemption = await prisma.rewardRedemption.create({
@@ -539,9 +663,11 @@ app.post("/api/redemption", async (req, res) => {
         status: "PENDING",
       },
     });
- 
+
+    console.log("[POST /api/redemption] Redemption created:", redemption, "| remainingPoints:", updatedCustomer.currentPoints);
     res.status(201).json({ redemption, remainingPoints: updatedCustomer.currentPoints });
   } catch (err) {
+    console.log("[POST /api/redemption] Error:", err.message);
     await logActivity("ERROR", "POST /api/redemption", err.message);
     res.status(500).json({ error: "Failed to process redemption" });
   }
@@ -561,7 +687,10 @@ app.post("/webhooks/orders-paid", async (req, res) => {
   }
 
   const webhookId = req.get("X-Shopify-Webhook-Id") || `sim-${Date.now()}`;
+  console.log("[webhooks/orders-paid] webhookId:", webhookId, "| order id:", req.body.id);
+
   if (processedWebhooks.includes(webhookId)) {
+    console.log("[webhooks/orders-paid] Duplicate webhook, ignoring:", webhookId);
     return res.json({ status: "duplicate_ignored" });
   }
 
@@ -572,6 +701,8 @@ app.post("/webhooks/orders-paid", async (req, res) => {
   const purchaseRule = await prisma.loyaltyRule.findFirst({
     where: { name: "Purchase", isActive: true },
   });
+
+  console.log("[webhooks/orders-paid] shopifyCustomerId:", shopifyCustomerId, "| totalPrice:", totalPrice, "| purchaseRule:", purchaseRule);
 
   if (shopifyCustomerId && purchaseRule && !isNaN(totalPrice)) {
     const pointsEarned = Math.floor(totalPrice / 100) * purchaseRule.points;
@@ -588,6 +719,7 @@ app.post("/webhooks/orders-paid", async (req, res) => {
           email: req.body.customer?.email || `customer-${shopifyCustomerId}@unknown.com`,
         },
       });
+      console.log("[webhooks/orders-paid] New customer created from webhook:", customer);
     }
 
     // This is the ONLY place tier/totalSpent/lifetimePoints change — right here,
@@ -616,10 +748,12 @@ app.post("/webhooks/orders-paid", async (req, res) => {
       },
     });
 
-    console.log(`Awarded ${pointsEarned} points to ${customer.name}`);
+    console.log(`[webhooks/orders-paid] Awarded ${pointsEarned} points to ${customer.name} | new tier: ${newTier}`);
   }
 
   const usedCodes = (req.body.discount_codes || []).map((d) => d.code);
+  console.log("[webhooks/orders-paid] Discount codes used on this order:", usedCodes);
+
   for (const usedCode of usedCodes) {
     const redemption = await prisma.rewardRedemption.findFirst({
       where: { generatedCode: usedCode, status: "PENDING" },
@@ -629,7 +763,7 @@ app.post("/webhooks/orders-paid", async (req, res) => {
         where: { id: redemption.id },
         data: { status: "APPLIED", orderId: String(orderId) },
       });
-      console.log(`Redemption ${usedCode} marked APPLIED on order #${orderId}`);
+      console.log(`[webhooks/orders-paid] Redemption ${usedCode} marked APPLIED on order #${orderId}`);
     }
   }
 
@@ -643,6 +777,7 @@ app.post("/webhooks/orders-create", async (req, res) => {
     await logActivity("WEBHOOK", "orders/create", "HMAC verification failed");
     return res.status(401).send("Unauthorized");
   }
+  console.log("[webhooks/orders-create] Order created:", req.body.id);
   await logActivity("WEBHOOK", "orders/create", `Order #${req.body.id} created`);
   res.json({ status: "logged" });
 });
@@ -652,6 +787,7 @@ app.post("/webhooks/orders-cancelled", async (req, res) => {
     await logActivity("WEBHOOK", "orders/cancelled", "HMAC verification failed");
     return res.status(401).send("Unauthorized");
   }
+  console.log("[webhooks/orders-cancelled] Order cancelled:", req.body.id);
   await logActivity("WEBHOOK", "orders/cancelled", `Order #${req.body.id} cancelled`);
   res.json({ status: "logged" });
 });
@@ -664,9 +800,13 @@ app.post("/webhooks/orders-refunded", async (req, res) => {
 
   try {
     const orderId = req.body.order_id || req.body.id;
+    console.log("[webhooks/orders-refunded] Refund for order:", orderId);
+
     const earnTx = await prisma.transaction.findFirst({
       where: { note: { contains: `Order #${orderId}` }, type: "EARN" },
     });
+
+    console.log("[webhooks/orders-refunded] Matching earn transaction:", earnTx);
 
     if (earnTx) {
       await prisma.customer.update({
@@ -690,22 +830,25 @@ app.post("/webhooks/orders-refunded", async (req, res) => {
     }
     res.json({ status: "processed" });
   } catch (err) {
+    console.log("[webhooks/orders-refunded] Error:", err.message);
     await logActivity("ERROR", "orders/refunded", err.message);
     res.status(500).json({ error: "Failed to process refund" });
   }
 });
 
- 
+
 app.post("/webhooks/customers-create", async (req, res) => {
   if (!verifyShopifyWebhook(req)) {
     await logActivity("WEBHOOK", "customers/create", "HMAC verification failed");
     return res.status(401).send("Unauthorized");
   }
- 
+
   try {
     const shopifyCustomerId = String(req.body.id);
+    console.log("[webhooks/customers-create] shopifyCustomerId:", shopifyCustomerId);
+
     const existing = await prisma.customer.findUnique({ where: { shopifyCustomerId } });
- 
+
     if (!existing) {
       // Look up the "Signup" rule — same pattern as the "Purchase" rule lookup
       // in the orders-paid webhook.
@@ -713,7 +856,7 @@ app.post("/webhooks/customers-create", async (req, res) => {
         where: { name: "Signup", isActive: true },
       });
       const signupPoints = signupRule ? signupRule.points : 0;
- 
+
       const newCustomer = await prisma.customer.create({
         data: {
           shopifyCustomerId,
@@ -724,7 +867,9 @@ app.post("/webhooks/customers-create", async (req, res) => {
           tier: signupPoints > 0 ? await calculateTierFromDb(signupPoints) : "Bronze",
         },
       });
- 
+
+      console.log("[webhooks/customers-create] New customer created:", newCustomer, "| signupPoints:", signupPoints);
+
       // Record it as a transaction too, so it shows up in their history —
       // same as any other points-earning event.
       if (signupPoints > 0) {
@@ -737,11 +882,14 @@ app.post("/webhooks/customers-create", async (req, res) => {
           },
         });
       }
- 
+
       await logActivity("WEBHOOK", "customers/create", `Created customer ${shopifyCustomerId}, awarded ${signupPoints} signup pts`);
+    } else {
+      console.log("[webhooks/customers-create] Customer already exists, skipping:", shopifyCustomerId);
     }
     res.json({ status: "processed" });
   } catch (err) {
+    console.log("[webhooks/customers-create] Error:", err.message);
     await logActivity("ERROR", "customers/create", err.message);
     res.status(500).json({ error: "Failed to process customer creation" });
   }
@@ -752,6 +900,7 @@ app.post("/webhooks/app-uninstalled", async (req, res) => {
     await logActivity("WEBHOOK", "app/uninstalled", "HMAC verification failed");
     return res.status(401).send("Unauthorized");
   }
+  console.log("[webhooks/app-uninstalled] App uninstalled from:", req.body.domain);
   await logActivity("WEBHOOK", "app/uninstalled", `App uninstalled from ${req.body.domain || "store"}`);
   res.json({ status: "acknowledged" });
 });
@@ -807,7 +956,7 @@ app.get("/api/analytics/summary", requireAuth, async (req, res) => {
         ? 100
         : 0;
 
-    res.json({
+    const summary = {
       totalMembers,
       totalPointsIssued,
       totalPointsRedeemed,
@@ -817,8 +966,12 @@ app.get("/api/analytics/summary", requireAuth, async (req, res) => {
       topCustomers,
       activeMembers,
       monthlyGrowth,
-    });
+    };
+
+    console.log("[GET /api/analytics/summary] Computed summary:", summary);
+    res.json(summary);
   } catch (err) {
+    console.log("[GET /api/analytics/summary] Error:", err.message);
     await logActivity("ERROR", "GET /api/analytics/summary", err.message);
     res.status(500).json({ error: "Failed to load analytics" });
   }
