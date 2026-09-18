@@ -232,14 +232,43 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 
 app.get("/api/logs", requireAuth, async (req, res) => {
-  const logs = await prisma.activityLog.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
-  console.log("[GET /api/logs] Returning", logs.length, "log rows");
-  res.json(logs);
+  try {
+    const { page = 1, limit = 20, type } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+ 
+    console.log("[GET /api/logs] Query params:", { page: pageNum, limit: limitNum, type });
+ 
+    const where = type && type !== "ALL" ? { type } : {};
+ 
+    const [logs, total] = await Promise.all([
+      prisma.activityLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+      }),
+      prisma.activityLog.count({ where }),
+    ]);
+ 
+    console.log("[GET /api/logs] Found", total, "total logs, returning page", pageNum);
+ 
+    res.json({
+      data: logs,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      },
+    });
+  } catch (err) {
+    console.log("[GET /api/logs] Error:", err.message);
+    await logActivity("ERROR", "GET /api/logs", err.message);
+    res.status(500).json({ error: "Failed to load logs" });
+  }
 });
-
+ 
 // ═══════════════════════════════════════════════════════════
 // LOYALTY RULES
 // ═══════════════════════════════════════════════════════════
