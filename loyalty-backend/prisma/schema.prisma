@@ -37,13 +37,13 @@ model LoyaltyRule {
   points   Int
   isActive Boolean  @default(true)
 }
-
 model Reward {
-  id         Int      @id @default(autoincrement())
-  name       String
-  type       String
-  pointsCost Int
-  isActive   Boolean  @default(true)
+  id               Int      @id @default(autoincrement())
+  name             String
+  type             String
+  shopifyProductId String?
+  pointsCost       Int
+  isActive         Boolean  @default(true)
 
   redemptions RewardRedemption[]
 }
