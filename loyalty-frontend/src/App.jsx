@@ -90,6 +90,13 @@ function MerchantDashboard() {
   const [custPage, setCustPage] = useState(1);
   const [custTotalPages, setCustTotalPages] = useState(1);
 
+  // NEW — pagination state for the Recent Redemptions table
+  const [redemptionsLoading, setRedemptionsLoading] = useState(true);
+  const [redPage, setRedPage] = useState(1);
+  const [redTotalPages, setRedTotalPages] = useState(1);
+
+  // Everything except redemptions loads once on mount (rules/rewards/tiers/stats
+  // don't need pagination, so they stay in this first Promise.all)
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -100,15 +107,13 @@ function MerchantDashboard() {
       authFetch("/api/rewards").then((r) => (r ? r.json() : [])),
       authFetch("/api/tiers").then((r) => (r ? r.json() : [])),
       authFetch("/api/analytics/summary").then((r) => (r ? r.json() : null)),
-      authFetch("/api/redemptions").then((r) => (r ? r.json() : [])),
     ])
-      .then(([rulesData, rewardsData, tiersData, statsData, redemptionsData]) => {
+      .then(([rulesData, rewardsData, tiersData, statsData]) => {
         if (cancelled) return;
         setRules(rulesData || []);
         setRewards(rewardsData || []);
         setTiers((tiersData || []).sort((a, b) => a.minPoints - b.minPoints));
         setStats(statsData);
-        setRedemptions(redemptionsData || []);
       })
       .catch(() => {
         if (!cancelled) setError("Couldn't load dashboard data. Please refresh.");
@@ -119,6 +124,23 @@ function MerchantDashboard() {
 
     return () => { cancelled = true; };
   }, []);
+
+  // NEW — Recent Redemptions now fetches its own page separately, so
+  // Previous/Next only refetches this table, not the whole dashboard
+  useEffect(() => {
+    setRedemptionsLoading(true);
+    const params = new URLSearchParams();
+    params.append("page", redPage);
+    params.append("limit", 10);
+
+    authFetch(`/api/redemptions?${params.toString()}`)
+      .then((res) => (res ? res.json() : { data: [], pagination: { totalPages: 1 } }))
+      .then((result) => {
+        setRedemptions(result?.data || []);
+        setRedTotalPages(result?.pagination?.totalPages || 1);
+      })
+      .finally(() => setRedemptionsLoading(false));
+  }, [redPage]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -211,42 +233,68 @@ function MerchantDashboard() {
         </Panel>
       </div>
 
-      {/* Recent redemptions */}
-      <Panel title="Recent Redemptions" emptyText="No redemptions yet." isEmpty={redemptions.length === 0}>
-        <div className="overflow-x-auto -mx-4">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-800">
-                <th className="px-4 py-2">Customer</th>
-                <th className="px-4 py-2">Reward</th>
-                <th className="px-4 py-2">Points</th>
-                <th className="px-4 py-2">Code</th>
-                <th className="px-4 py-2">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {redemptions.slice(0, 10).map((r) => (
-                <tr key={r.id} className="border-b border-gray-50 dark:border-gray-800 last:border-none">
-                  <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{r.customer?.name ?? "—"}</td>
-                  <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{r.reward?.name ?? "—"}</td>
-                  <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{r.pointsSpent}</td>
-                  <td className="px-4 py-2 font-mono text-xs text-gray-800 dark:text-gray-200">{r.generatedCode}</td>
-                  <td className="px-4 py-2">
-                    <span
-                      className={`text-xs font-medium px-2 py-1 rounded-full ${
-                        r.status === "APPLIED"
-                          ? "text-green-700 bg-green-50 dark:text-green-300 dark:bg-green-950"
-                          : "text-yellow-700 bg-yellow-50 dark:text-yellow-300 dark:bg-yellow-950"
-                      }`}
-                    >
-                      {r.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {/* Recent redemptions — now paginated (10 per page) */}
+      <Panel title="Recent Redemptions" emptyText="No redemptions yet." isEmpty={!redemptionsLoading && redemptions.length === 0}>
+        {redemptionsLoading ? (
+          <div className="text-center py-6 text-gray-400 text-sm">Loading redemptions…</div>
+        ) : (
+          <>
+            <div className="overflow-x-auto -mx-4">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-800">
+                    <th className="px-4 py-2">Customer</th>
+                    <th className="px-4 py-2">Reward</th>
+                    <th className="px-4 py-2">Points</th>
+                    <th className="px-4 py-2">Code</th>
+                    <th className="px-4 py-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {redemptions.map((r) => (
+                    <tr key={r.id} className="border-b border-gray-50 dark:border-gray-800 last:border-none">
+                      <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{r.customer?.name ?? "—"}</td>
+                      <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{r.reward?.name ?? "—"}</td>
+                      <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{r.pointsSpent}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-800 dark:text-gray-200">{r.generatedCode}</td>
+                      <td className="px-4 py-2">
+                        <span
+                          className={`text-xs font-medium px-2 py-1 rounded-full ${
+                            r.status === "APPLIED"
+                              ? "text-green-700 bg-green-50 dark:text-green-300 dark:bg-green-950"
+                              : "text-yellow-700 bg-yellow-50 dark:text-yellow-300 dark:bg-yellow-950"
+                          }`}
+                        >
+                          {r.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {redTotalPages > 1 && (
+              <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-100 dark:border-gray-800">
+                <button
+                  onClick={() => setRedPage((p) => Math.max(1, p - 1))}
+                  disabled={redPage === 1}
+                  className="text-sm text-purple-600 dark:text-purple-400 disabled:text-gray-300 dark:disabled:text-gray-600"
+                >
+                  ← Previous
+                </button>
+                <span className="text-xs text-gray-400">Page {redPage} of {redTotalPages}</span>
+                <button
+                  onClick={() => setRedPage((p) => Math.min(redTotalPages, p + 1))}
+                  disabled={redPage === redTotalPages}
+                  className="text-sm text-purple-600 dark:text-purple-400 disabled:text-gray-300 dark:disabled:text-gray-600"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </Panel>
 
       {/* Customers panel */}
