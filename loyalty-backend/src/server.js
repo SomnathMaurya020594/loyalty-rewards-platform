@@ -840,15 +840,43 @@ app.get("/api/redemptions/:code", requireAuth, async (req, res) => {
   res.json(redemption);
 });
 
+ 
 app.get("/api/redemptions", requireAuth, async (req, res) => {
-  const redemptions = await prisma.rewardRedemption.findMany({
-    include: { customer: true, reward: true },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-  });
-  console.log("[GET /api/redemptions] Returning", redemptions.length, "redemptions");
-  res.json(redemptions);
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+ 
+    console.log("[GET /api/redemptions] page:", pageNum, "| limit:", limitNum);
+ 
+    const [redemptions, total] = await Promise.all([
+      prisma.rewardRedemption.findMany({
+        include: { customer: true, reward: true },
+        orderBy: { createdAt: "desc" },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+      }),
+      prisma.rewardRedemption.count(),
+    ]);
+ 
+    console.log("[GET /api/redemptions] Found", total, "total redemptions, returning page", pageNum);
+ 
+    res.json({
+      data: redemptions,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      },
+    });
+  } catch (err) {
+    console.log("[GET /api/redemptions] Error:", err.message);
+    await logActivity("ERROR", "GET /api/redemptions", err.message);
+    res.status(500).json({ error: "Failed to load redemptions" });
+  }
 });
+
 
 // Redemption does NOT touch tier/lifetimePoints/totalSpent — those only change
 // when a customer EARNS points (orders-paid webhook). Redeeming only spends
@@ -919,6 +947,45 @@ app.post("/api/redemption", async (req, res) => {
     console.log("[POST /api/redemption] Error:", err.message);
     await logActivity("ERROR", "POST /api/redemption", err.message);
     res.status(500).json({ error: "Failed to process redemption" });
+  }
+});
+
+
+
+
+app.get("/api/analytics/top-customers", requireAuth, async (req, res) => {
+  try {
+    const { page = 1, limit = 5 } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+ 
+    console.log("[GET /api/analytics/top-customers] page:", pageNum, "| limit:", limitNum);
+ 
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({
+        orderBy: { lifetimePoints: "desc" },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+        select: { id: true, name: true, email: true, lifetimePoints: true, totalSpent: true, tier: true },
+      }),
+      prisma.customer.count(),
+    ]);
+ 
+    console.log("[GET /api/analytics/top-customers] Found", total, "customers total");
+ 
+    res.json({
+      data: customers,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      },
+    });
+  } catch (err) {
+    console.log("[GET /api/analytics/top-customers] Error:", err.message);
+    await logActivity("ERROR", "GET /api/analytics/top-customers", err.message);
+    res.status(500).json({ error: "Failed to load top customers" });
   }
 });
 
