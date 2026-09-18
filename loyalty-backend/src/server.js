@@ -707,6 +707,96 @@ app.get("/api/customers/by-shopify-id/:shopifyId/transactions", async (req, res)
   res.json(transactions);
 });
 
+function convertToCsv(rows) {
+  if (!rows || rows.length === 0) return "";
+ 
+  const headers = Object.keys(rows[0]);
+  const headerLine = headers.join(",");
+ 
+  const dataLines = rows.map((row) =>
+    headers
+      .map((key) => {
+        const value = row[key] === null || row[key] === undefined ? "" : String(row[key]);
+        // Wrap in quotes if the value contains a comma, so the CSV stays valid
+        const escaped = value.includes(",") ? `"${value.replace(/"/g, '""')}"` : value;
+        return escaped;
+      })
+      .join(",")
+  );
+ 
+  return [headerLine, ...dataLines].join("\n");
+}
+ 
+// GET /api/customers/export — downloads all customers as a CSV file
+app.get("/api/customers/export", requireAuth, async (req, res) => {
+  try {
+    console.log("[GET /api/customers/export] Generating customers CSV");
+ 
+    const customers = await prisma.customer.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        currentPoints: true,
+        lifetimePoints: true,
+        redeemedPoints: true,
+        totalSpent: true,
+        tier: true,
+        createdAt: true,
+      },
+    });
+ 
+    const csv = convertToCsv(customers);
+ 
+    console.log("[GET /api/customers/export] Exporting", customers.length, "customers");
+ 
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=customers.csv");
+    res.send(csv);
+  } catch (err) {
+    console.log("[GET /api/customers/export] Error:", err.message);
+    await logActivity("ERROR", "GET /api/customers/export", err.message);
+    res.status(500).json({ error: "Failed to export customers" });
+  }
+});
+ 
+// GET /api/redemptions/export — downloads all redemptions as a CSV file
+app.get("/api/redemptions/export", requireAuth, async (req, res) => {
+  try {
+    console.log("[GET /api/redemptions/export] Generating redemptions CSV");
+ 
+    const redemptions = await prisma.rewardRedemption.findMany({
+      include: { customer: true, reward: true },
+      orderBy: { createdAt: "desc" },
+    });
+ 
+    // Flatten the nested customer/reward objects into simple CSV columns
+    const flatRows = redemptions.map((r) => ({
+      id: r.id,
+      customerName: r.customer?.name || "",
+      customerEmail: r.customer?.email || "",
+      rewardName: r.reward?.name || "",
+      pointsSpent: r.pointsSpent,
+      generatedCode: r.generatedCode,
+      status: r.status,
+      orderId: r.orderId || "",
+      createdAt: r.createdAt,
+    }));
+ 
+    const csv = convertToCsv(flatRows);
+ 
+    console.log("[GET /api/redemptions/export] Exporting", flatRows.length, "redemptions");
+ 
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=redemptions.csv");
+    res.send(csv);
+  } catch (err) {
+    console.log("[GET /api/redemptions/export] Error:", err.message);
+    await logActivity("ERROR", "GET /api/redemptions/export", err.message);
+    res.status(500).json({ error: "Failed to export redemptions" });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 // REDEMPTIONS
 // ═══════════════════════════════════════════════════════════

@@ -12,6 +12,26 @@ import LoginPage from "./pages/LoginPage";
 import { authFetch } from "./utils/api";
 import WebhookLogsPage from "./pages/WebhookLogsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import { useDarkMode } from "./hooks/useDarkMode";
+
+function App() {
+  const [isDark, setIsDark] = useDarkMode();
+
+  return (
+    <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+      {/* Baaki app code yahan */}
+
+      <button
+        onClick={() => setIsDark(!isDark)}
+        className="fixed bottom-4 right-4 p-3 rounded-full bg-gray-200 dark:bg-gray-700 shadow-lg"
+        title="Toggle dark mode"
+      >
+        {isDark ? "☀️" : "🌙"}
+      </button>
+    </div>
+  );
+}
+
 
 const TIERS = ["All", "Bronze", "Silver", "Gold", "Platinum"];
 const TIER_STYLES = {
@@ -313,7 +333,7 @@ useEffect(() => {
 
 function StatCard({ label, value }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
       <div className="text-xs text-gray-500 uppercase tracking-wide">{label}</div>
       <div className="text-2xl font-bold text-gray-900 mt-1">{value}</div>
     </div>

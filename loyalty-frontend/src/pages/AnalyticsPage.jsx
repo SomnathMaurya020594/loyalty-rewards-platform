@@ -94,7 +94,7 @@ function AnalyticsPage() {
 
 function StatCard({ label, value, sub, negative }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
       <div className="text-xs text-gray-500">{label}</div>
       <div className={`text-2xl font-bold mt-1 ${negative ? "text-red-600" : "text-gray-900"}`}>{value}</div>
       {sub && <div className="text-xs text-gray-400 mt-1">{sub}</div>}

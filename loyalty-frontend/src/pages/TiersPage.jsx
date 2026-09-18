@@ -82,7 +82,7 @@ function TiersPage() {
       </p>
 
       {/* Create/Edit form — same form is reused for both, label changes based on editingId */}
-      <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-lg p-4 mb-6 flex gap-3 items-end">
+      <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-6 flex gap-3 items-end">
         <div className="flex-1">
           <label className="text-xs text-gray-500 block mb-1">Tier Name</label>
           <input

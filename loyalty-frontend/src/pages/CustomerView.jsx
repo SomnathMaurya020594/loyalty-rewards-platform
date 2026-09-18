@@ -136,7 +136,7 @@ function CustomerView() {
       <div className="grid grid-cols-3 gap-4 mb-6">
         <StatCard label="Lifetime points" value={customer.lifetimePoints.toLocaleString()} />
         <StatCard label="Redeemed points" value={customer.redeemedPoints.toLocaleString()} />
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
           <div className="text-xs text-gray-500">Next tier</div>
           {nextTier ? (
             <>
@@ -250,7 +250,7 @@ function CustomerView() {
 // Small reusable stat card, same pattern used elsewhere in the app.
 function StatCard({ label, value }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
       <div className="text-xs text-gray-500">{label}</div>
       <div className="text-2xl font-bold text-gray-900 mt-1">{value}</div>
     </div>
