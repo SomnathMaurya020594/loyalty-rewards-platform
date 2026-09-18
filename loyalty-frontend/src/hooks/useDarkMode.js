@@ -8,7 +8,6 @@ export function useDarkMode() {
   });
 
   useEffect(() => {
-    // Adds/removes the "dark" class on <html>, which Tailwind's dark: styles react to
     if (isDark) {
       document.documentElement.classList.add("dark");
     } else {
