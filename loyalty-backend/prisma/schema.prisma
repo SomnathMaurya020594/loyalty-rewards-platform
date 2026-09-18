@@ -42,6 +42,7 @@ model Reward {
   name             String
   type             String
   shopifyProductId String?
+  discountValue Float?
   pointsCost       Int
   isActive         Boolean  @default(true)
 

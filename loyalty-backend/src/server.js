@@ -110,6 +110,7 @@ async function calculateTierFromDb(lifetimePoints) {
 
 // Creates a real, one-time, customer-locked Shopify discount code
  
+
 async function createShopifyDiscountCode(reward, shopifyCustomerId) {
   const code = "LOOP-" + Math.random().toString(36).substring(2, 8).toUpperCase();
  
@@ -119,22 +120,46 @@ async function createShopifyDiscountCode(reward, shopifyCustomerId) {
  
   console.log("[createShopifyDiscountCode] reward:", reward, "| shopifyCustomerId:", shopifyCustomerId, "| generated code:", code);
  
-  // FREE_PRODUCT rewards get a 100%-off code that only applies to that one
-  // product. Everything else keeps the old behaviour (a percentage off the
-  // whole order).
-  const isFreeProduct = reward.type === "FREE_PRODUCT" && reward.shopifyProductId;
+  // Work out what this code actually gives the customer, based on reward type
+  let customerGets;
  
-  const customerGets = isFreeProduct
-    ? {
-        value: { percentage: 1.0 }, // 100% off
-        items: { products: { productsToAdd: [reward.shopifyProductId] } },
-      }
-    : {
-        value: { percentage: reward.type === "PERCENTAGE_DISCOUNT" ? (reward.value || 10) / 100 : 0.1 },
-        items: { all: true },
-      };
+  if (reward.type === "FREE_PRODUCT" && reward.shopifyProductId) {
+    // 100% off, but ONLY on the linked product
+    customerGets = {
+      value: { percentage: 1.0 },
+      items: { products: { productsToAdd: [reward.shopifyProductId] } },
+    };
+  } else if (reward.type === "FIXED_DISCOUNT") {
+    // A flat rupee amount off the whole order
+    const amountOff = reward.discountValue || 0;
+    customerGets = {
+      value: {
+        discountAmount: {
+          amount: amountOff,
+          appliesOnEachItem: false,
+        },
+      },
+      items: { all: true },
+    };
+  } else if (reward.type === "PERCENTAGE_DISCOUNT") {
+    // A percentage off the whole order
+    const percentOff = (reward.discountValue || 10) / 100;
+    customerGets = {
+      value: { percentage: percentOff },
+      items: { all: true },
+    };
+  } else {
+    // FREE_SHIPPING and anything else — default small percentage for now.
+    // NOTE: a true free-shipping code needs Shopify's separate
+    // discountCodeFreeShippingCreate mutation, not this one. Documented as
+    // a known limitation.
+    customerGets = {
+      value: { percentage: 0.1 },
+      items: { all: true },
+    };
+  }
  
-  console.log("[createShopifyDiscountCode] isFreeProduct:", isFreeProduct, "| customerGets:", JSON.stringify(customerGets));
+  console.log("[createShopifyDiscountCode] Final customerGets:", JSON.stringify(customerGets));
  
   const mutation = `
     mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
@@ -283,10 +308,11 @@ app.get("/api/rewards", async (req, res) => {
 });
 
  
+ 
 app.post("/api/rewards", requireAuth, async (req, res) => {
   try {
-    const { name, type, pointsCost, shopifyProductId } = req.body;
-    console.log("[POST /api/rewards] Incoming data:", { name, type, pointsCost, shopifyProductId });
+    const { name, type, pointsCost, shopifyProductId, discountValue } = req.body;
+    console.log("[POST /api/rewards] Incoming data:", { name, type, pointsCost, shopifyProductId, discountValue });
  
     const validTypes = ["PERCENTAGE_DISCOUNT", "FIXED_DISCOUNT", "FREE_SHIPPING", "FREE_PRODUCT"];
     if (!name || typeof name !== "string" || !name.trim()) {
@@ -304,12 +330,19 @@ app.post("/api/rewards", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Please select a product for a Free Product reward" });
     }
  
+    // PERCENTAGE_DISCOUNT and FIXED_DISCOUNT both need a discount number set
+    if ((type === "PERCENTAGE_DISCOUNT" || type === "FIXED_DISCOUNT") &&
+        (discountValue === undefined || isNaN(Number(discountValue)) || Number(discountValue) <= 0)) {
+      return res.status(400).json({ error: "Please enter a discount value (percentage or amount)" });
+    }
+ 
     const newReward = await prisma.reward.create({
       data: {
         name: name.trim(),
         type,
         pointsCost: Number(pointsCost),
         shopifyProductId: type === "FREE_PRODUCT" ? shopifyProductId : null,
+        discountValue: (type === "PERCENTAGE_DISCOUNT" || type === "FIXED_DISCOUNT") ? Number(discountValue) : null,
       },
     });
  
@@ -323,8 +356,8 @@ app.post("/api/rewards", requireAuth, async (req, res) => {
 });
  
 app.put("/api/rewards/:id", requireAuth, async (req, res) => {
-  const { name, type, pointsCost, shopifyProductId } = req.body;
-  console.log("[PUT /api/rewards/:id] id:", req.params.id, "| data:", { name, type, pointsCost, shopifyProductId });
+  const { name, type, pointsCost, shopifyProductId, discountValue } = req.body;
+  console.log("[PUT /api/rewards/:id] id:", req.params.id, "| data:", { name, type, pointsCost, shopifyProductId, discountValue });
  
   const updated = await prisma.reward.update({
     where: { id: Number(req.params.id) },
@@ -333,6 +366,7 @@ app.put("/api/rewards/:id", requireAuth, async (req, res) => {
       type,
       pointsCost,
       shopifyProductId: type === "FREE_PRODUCT" ? shopifyProductId : null,
+      discountValue: (type === "PERCENTAGE_DISCOUNT" || type === "FIXED_DISCOUNT") ? Number(discountValue) : null,
     },
   });
   res.json(updated);
