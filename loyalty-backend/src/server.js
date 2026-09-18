@@ -109,16 +109,33 @@ async function calculateTierFromDb(lifetimePoints) {
 }
 
 // Creates a real, one-time, customer-locked Shopify discount code
+ 
 async function createShopifyDiscountCode(reward, shopifyCustomerId) {
   const code = "LOOP-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-  const percentage = reward.type === "PERCENTAGE_DISCOUNT" ? (reward.value || 10) / 100 : 0.1;
-
+ 
   const customerSelection = shopifyCustomerId
     ? { customers: { add: [`gid://shopify/Customer/${shopifyCustomerId}`] } }
     : { all: true };
-
+ 
   console.log("[createShopifyDiscountCode] reward:", reward, "| shopifyCustomerId:", shopifyCustomerId, "| generated code:", code);
-
+ 
+  // FREE_PRODUCT rewards get a 100%-off code that only applies to that one
+  // product. Everything else keeps the old behaviour (a percentage off the
+  // whole order).
+  const isFreeProduct = reward.type === "FREE_PRODUCT" && reward.shopifyProductId;
+ 
+  const customerGets = isFreeProduct
+    ? {
+        value: { percentage: 1.0 }, // 100% off
+        items: { products: { productsToAdd: [reward.shopifyProductId] } },
+      }
+    : {
+        value: { percentage: reward.type === "PERCENTAGE_DISCOUNT" ? (reward.value || 10) / 100 : 0.1 },
+        items: { all: true },
+      };
+ 
+  console.log("[createShopifyDiscountCode] isFreeProduct:", isFreeProduct, "| customerGets:", JSON.stringify(customerGets));
+ 
   const mutation = `
     mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
       discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
@@ -127,19 +144,19 @@ async function createShopifyDiscountCode(reward, shopifyCustomerId) {
       }
     }
   `;
-
+ 
   const variables = {
     basicCodeDiscount: {
       title: `Loyalty Redemption - ${code}`,
       code: code,
       startsAt: new Date().toISOString(),
       customerSelection,
-      customerGets: { value: { percentage: percentage }, items: { all: true } },
+      customerGets,
       appliesOncePerCustomer: true,
       usageLimit: 1,
     },
   };
-
+ 
   const response = await fetch(
     `https://${process.env.SHOPIFY_STORE_URL}/admin/api/2026-07/graphql.json`,
     {
@@ -151,10 +168,10 @@ async function createShopifyDiscountCode(reward, shopifyCustomerId) {
       body: JSON.stringify({ query: mutation, variables }),
     }
   );
-
+ 
   const data = await response.json();
   console.log("[createShopifyDiscountCode] Shopify response:", JSON.stringify(data));
-
+ 
   if (data.data?.discountCodeBasicCreate?.userErrors?.length > 0) {
     throw new Error(data.data.discountCodeBasicCreate.userErrors[0].message);
   }
@@ -265,11 +282,12 @@ app.get("/api/rewards", async (req, res) => {
   res.json(rewards);
 });
 
+ 
 app.post("/api/rewards", requireAuth, async (req, res) => {
   try {
-    const { name, type, pointsCost } = req.body;
-    console.log("[POST /api/rewards] Incoming data:", { name, type, pointsCost });
-
+    const { name, type, pointsCost, shopifyProductId } = req.body;
+    console.log("[POST /api/rewards] Incoming data:", { name, type, pointsCost, shopifyProductId });
+ 
     const validTypes = ["PERCENTAGE_DISCOUNT", "FIXED_DISCOUNT", "FREE_SHIPPING", "FREE_PRODUCT"];
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "Reward name is required" });
@@ -280,7 +298,21 @@ app.post("/api/rewards", requireAuth, async (req, res) => {
     if (pointsCost === undefined || isNaN(Number(pointsCost)) || Number(pointsCost) <= 0) {
       return res.status(400).json({ error: "Points cost must be a positive number" });
     }
-    const newReward = await prisma.reward.create({ data: { name: name.trim(), type, pointsCost: Number(pointsCost) } });
+ 
+    // A FREE_PRODUCT reward must be linked to a real Shopify product
+    if (type === "FREE_PRODUCT" && !shopifyProductId) {
+      return res.status(400).json({ error: "Please select a product for a Free Product reward" });
+    }
+ 
+    const newReward = await prisma.reward.create({
+      data: {
+        name: name.trim(),
+        type,
+        pointsCost: Number(pointsCost),
+        shopifyProductId: type === "FREE_PRODUCT" ? shopifyProductId : null,
+      },
+    });
+ 
     console.log("[POST /api/rewards] Created reward:", newReward);
     res.status(201).json(newReward);
   } catch (err) {
@@ -289,13 +321,19 @@ app.post("/api/rewards", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Failed to create reward" });
   }
 });
-
+ 
 app.put("/api/rewards/:id", requireAuth, async (req, res) => {
-  const { name, type, pointsCost } = req.body;
-  console.log("[PUT /api/rewards/:id] id:", req.params.id, "| data:", { name, type, pointsCost });
+  const { name, type, pointsCost, shopifyProductId } = req.body;
+  console.log("[PUT /api/rewards/:id] id:", req.params.id, "| data:", { name, type, pointsCost, shopifyProductId });
+ 
   const updated = await prisma.reward.update({
     where: { id: Number(req.params.id) },
-    data: { name, type, pointsCost },
+    data: {
+      name,
+      type,
+      pointsCost,
+      shopifyProductId: type === "FREE_PRODUCT" ? shopifyProductId : null,
+    },
   });
   res.json(updated);
 });
@@ -314,6 +352,64 @@ app.delete("/api/rewards/:id", requireAuth, async (req, res) => {
   console.log("[DELETE /api/rewards/:id] Deleting reward:", req.params.id);
   await prisma.reward.delete({ where: { id: Number(req.params.id) } });
   res.json({ success: true });
+});
+
+
+async function fetchShopifyProducts() {
+  const query = `
+    query {
+      products(first: 25) {
+        edges {
+          node {
+            id
+            title
+            featuredImage { url }
+          }
+        }
+      }
+    }
+  `;
+ 
+  console.log("[fetchShopifyProducts] Calling Shopify Admin API for product list");
+ 
+  const response = await fetch(
+    `https://${process.env.SHOPIFY_STORE_URL}/admin/api/2026-07/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_TOKEN,
+      },
+      body: JSON.stringify({ query }),
+    }
+  );
+ 
+  const data = await response.json();
+  console.log("[fetchShopifyProducts] Shopify response:", JSON.stringify(data));
+ 
+  if (!data.data?.products?.edges) {
+    throw new Error("Could not load products from Shopify");
+  }
+ 
+  // Turn Shopify's nested edges/node shape into a simple flat list
+  return data.data.products.edges.map((edge) => ({
+    id: edge.node.id, // looks like "gid://shopify/Product/123456789"
+    title: edge.node.title,
+    image: edge.node.featuredImage?.url || null,
+  }));
+}
+ 
+// GET /api/shopify/products — merchant-only, used when creating a FREE_PRODUCT reward
+app.get("/api/shopify/products", requireAuth, async (req, res) => {
+  try {
+    const products = await fetchShopifyProducts();
+    console.log("[GET /api/shopify/products] Returning", products.length, "products");
+    res.json(products);
+  } catch (err) {
+    console.log("[GET /api/shopify/products] Error:", err.message);
+    await logActivity("ERROR", "GET /api/shopify/products", err.message);
+    res.status(500).json({ error: "Failed to load products from Shopify" });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════
