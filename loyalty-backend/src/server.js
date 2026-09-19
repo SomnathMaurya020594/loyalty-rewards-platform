@@ -1152,62 +1152,70 @@ app.post("/webhooks/orders-refunded", async (req, res) => {
   }
 });
 
-
-app.post("/webhooks/customers-create", async (req, res) => {
-  if (!verifyShopifyWebhook(req)) {
-    await logActivity("WEBHOOK", "customers/create", "HMAC verification failed");
-    return res.status(401).send("Unauthorized");
-  }
-
+app.post("/webhooks/customers-create", verifyShopifyWebhook, async (req, res) => {
   try {
-    const shopifyCustomerId = String(req.body.id);
-    console.log("[webhooks/customers-create] shopifyCustomerId:", shopifyCustomerId);
-
-    const existing = await prisma.customer.findUnique({ where: { shopifyCustomerId } });
-
-    if (!existing) {
-      // Look up the "Signup" rule — same pattern as the "Purchase" rule lookup
-      // in the orders-paid webhook.
-      const signupRule = await prisma.loyaltyRule.findFirst({
-        where: { name: "Signup", isActive: true },
-      });
-      const signupPoints = signupRule ? signupRule.points : 0;
-
-      const newCustomer = await prisma.customer.create({
+    const customer = req.body;
+    console.log("[Webhook: customers/create] Payload received:", customer);
+ 
+    // Build the display name from Shopify's first_name / last_name fields.
+    // Shopify sends these as null or "" when the customer didn't fill them
+    // in (e.g. quick signup with just an email) — in that case, fall back
+    // to their email instead of storing a blank/placeholder name.
+    const firstName = (customer.first_name || "").trim();
+    const lastName = (customer.last_name || "").trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+ 
+    const resolvedName = fullName.length > 0 ? fullName : customer.email;
+ 
+    console.log(
+      "[Webhook: customers/create] Resolved name -> first:", firstName,
+      "| last:", lastName,
+      "| email:", customer.email,
+      "| using:", resolvedName
+    );
+ 
+    const existing = await prisma.customer.findUnique({
+      where: { shopifyCustomerId: String(customer.id) },
+    });
+ 
+    if (existing) {
+      console.log("[Webhook: customers/create] Customer already exists, skipping creation.");
+      return res.status(200).json({ received: true });
+    }
+ 
+    const signupRule = await prisma.loyaltyRule.findFirst({
+      where: { name: "Signup", isActive: true },
+    });
+ 
+    const newCustomer = await prisma.customer.create({
+      data: {
+        shopifyCustomerId: String(customer.id),
+        name: resolvedName,
+        email: customer.email,
+        currentPoints: signupRule ? signupRule.points : 0,
+        lifetimePoints: signupRule ? signupRule.points : 0,
+      },
+    });
+ 
+    if (signupRule) {
+      await prisma.transaction.create({
         data: {
-          shopifyCustomerId,
-          name: `${req.body.first_name || "Shopify"} ${req.body.last_name || "Customer"}`,
-          email: req.body.email || `customer-${shopifyCustomerId}@unknown.com`,
-          currentPoints: signupPoints,
-          lifetimePoints: signupPoints,
-          tier: signupPoints > 0 ? await calculateTierFromDb(signupPoints) : "Bronze",
+          customerId: newCustomer.id,
+          type: "EARN",
+          points: signupRule.points,
+          note: "Signup bonus",
         },
       });
-
-      console.log("[webhooks/customers-create] New customer created:", newCustomer, "| signupPoints:", signupPoints);
-
-      // Record it as a transaction too, so it shows up in their history —
-      // same as any other points-earning event.
-      if (signupPoints > 0) {
-        await prisma.transaction.create({
-          data: {
-            customerId: newCustomer.id,
-            type: "EARN",
-            points: signupPoints,
-            note: "Signup bonus",
-          },
-        });
-      }
-
-      await logActivity("WEBHOOK", "customers/create", `Created customer ${shopifyCustomerId}, awarded ${signupPoints} signup pts`);
-    } else {
-      console.log("[webhooks/customers-create] Customer already exists, skipping:", shopifyCustomerId);
     }
-    res.json({ status: "processed" });
+ 
+    console.log("[Webhook: customers/create] Customer created:", newCustomer.id, "with name:", resolvedName);
+    await logActivity("WEBHOOK", "customers/create", `Created customer ${newCustomer.id} (${resolvedName})`);
+ 
+    res.status(200).json({ received: true });
   } catch (err) {
-    console.log("[webhooks/customers-create] Error:", err.message);
-    await logActivity("ERROR", "customers/create", err.message);
-    res.status(500).json({ error: "Failed to process customer creation" });
+    console.log("[Webhook: customers/create] Error:", err.message);
+    await logActivity("ERROR", "webhooks/customers-create", err.message);
+    res.status(500).json({ error: "Webhook processing failed" });
   }
 });
 
